@@ -104,6 +104,23 @@ export const ITEM_IMAGES_SQL = `
 `;
 
 /**
+ * 我发布的物品（`GET /api/me/items`，契约 §6）。
+ *
+ * 参数：$1 ownerId, $2 communityId, $3 status（`null` = **三种状态全返回**，含已归档——
+ * 需求「已归档可查看」与 `/me` 的「我的发布」列表都依赖这一档）。
+ * 排序：`publishedAt` 倒序（D2 的唯一时间序口径），`id` 兜底保证确定。
+ */
+export const MY_ITEMS_SQL = `
+  SELECT ${ITEM_SELECT}
+    FROM "Item" i
+    JOIN "User" u ON u.id = i."ownerId"
+   WHERE i."ownerId" = $1
+     AND i."communityId" = $2
+     AND ($3::text IS NULL OR i."status" = $3::"ItemStatus")
+   ORDER BY i."publishedAt" DESC, i.id DESC
+`;
+
+/**
  * 转义 LIKE 模式中的特殊字符（`\`、`%`、`_`），防止用户输入被当成通配符。
  * 与 SQL 中的 `ESCAPE '\'` 配套使用；转义后的值仍走占位符绑定（绝不拼接）。
  */

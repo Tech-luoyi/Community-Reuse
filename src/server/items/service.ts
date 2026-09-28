@@ -4,7 +4,7 @@
  * - **读**走 `$queryRawUnsafe` + 占位符（SQL 来自 `sql.ts`，绝不拼字符串）。
  * - **不在此处写**：所有写操作在路由内用 Prisma Client（`prisma.item.*`）完成（P5）。
  */
-import type { ItemDetailDto, ItemDto, ItemListQuery } from '@/shared/types';
+import type { ItemDetailDto, ItemDto, ItemListQuery, MyItemsQuery } from '@/shared/types';
 
 import type { Viewer } from '@/server/auth/guard';
 import { prisma } from '@/server/db';
@@ -23,6 +23,7 @@ import {
   ITEM_LIST_COUNT_SQL,
   ITEM_LIST_SQL_LATEST,
   ITEM_LIST_SQL_OLDEST,
+  MY_ITEMS_SQL,
   escapeLike,
 } from './sql';
 
@@ -89,4 +90,18 @@ export async function loadItemDetail(itemId: string, viewer: Viewer): Promise<It
   }
   const images = await prisma.$queryRawUnsafe<RawItemImageRow[]>(ITEM_IMAGES_SQL, itemId);
   return mapItemDetailRow(row, viewer.id, images);
+}
+
+/**
+ * 我发布的物品（`GET /api/me/items`，契约 §6）。
+ * `status` 缺省 ⇒ 三态全返回（含 `ARCHIVED`，对应「已归档可查看」）；无分页。
+ */
+export async function listMyItems(viewer: Viewer, query: MyItemsQuery): Promise<ItemDto[]> {
+  const rows = await prisma.$queryRawUnsafe<RawItemRow[]>(
+    MY_ITEMS_SQL,
+    viewer.id,
+    viewer.currentCommunityId,
+    query.status ?? null,
+  );
+  return rows.map(mapItemRow);
 }

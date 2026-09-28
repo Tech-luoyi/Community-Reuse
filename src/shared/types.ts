@@ -21,6 +21,7 @@ import {
   ErrorDetailSchema,
   FaqRequestSchema,
   FaqResultSchema,
+  FavoriteResultSchema,
   FreshnessCodeSchema,
   FreshnessSchema,
   HealthDataSchema,
@@ -35,7 +36,12 @@ import {
   JoinResponseDataSchema,
   MeResponseDataSchema,
   MembershipSchema,
+  MessageDtoSchema,
+  MessageRequestSchema,
   MessageSenderTypeSchema,
+  MyItemsQuerySchema,
+  NotificationDtoSchema,
+  NotificationListQuerySchema,
   NotificationTypeSchema,
   PaginationSchema,
   PatchMeRequestSchema,
@@ -44,9 +50,13 @@ import {
   PricingModeSchema,
   PricingRequestSchema,
   PricingResultSchema,
+  StatsDtoSchema,
+  StatsMonthRangeSchema,
+  StatsQuerySchema,
   SwitchCommunityRequestSchema,
   TradeTypeSchema,
   UpdateItemRequestSchema,
+  UploadResultSchema,
   UserSelfSchema,
   UserSummarySchema,
 } from './schemas';
@@ -92,6 +102,24 @@ export type UpdateItemRequest = z.infer<typeof UpdateItemRequestSchema>;
 export type ClaimDto = z.infer<typeof ClaimDtoSchema>;
 export type CreateClaimRequest = z.infer<typeof CreateClaimRequestSchema>;
 export type ClaimListQuery = z.infer<typeof ClaimListQuerySchema>;
+
+/* ---- 图片上传 ---- */
+export type UploadResult = z.infer<typeof UploadResultSchema>;
+
+/* ---- 留言板 ---- */
+export type MessageDto = z.infer<typeof MessageDtoSchema>;
+export type MessageRequest = z.infer<typeof MessageRequestSchema>;
+
+/* ---- 收藏 / 我的 / 通知 ---- */
+export type FavoriteResult = z.infer<typeof FavoriteResultSchema>;
+export type MyItemsQuery = z.infer<typeof MyItemsQuerySchema>;
+export type NotificationDto = z.infer<typeof NotificationDtoSchema>;
+export type NotificationListQuery = z.infer<typeof NotificationListQuerySchema>;
+
+/* ---- 数据看板 ---- */
+export type StatsMonthRange = z.infer<typeof StatsMonthRangeSchema>;
+export type StatsDto = z.infer<typeof StatsDtoSchema>;
+export type StatsQuery = z.infer<typeof StatsQuerySchema>;
 
 /* ---- LLM ---- */
 export type AiSource = z.infer<typeof AiSourceSchema>;
