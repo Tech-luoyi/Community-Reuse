@@ -289,7 +289,9 @@ stateDiagram-v2
 
 **① 新鲜度：计算 vs 存字段 → 结论：读时计算，不落库；且 `ageHours` 是「SQL 查询结果列」，不是 JS 计算字段**
 
-**原则（重要，防回退）**：`publishedAt` 由 **DB 时钟**写入（`DEFAULT CURRENT_TIMESTAMP`，见 §4.3② 时钟源清单）。故 `ageHours` **必须在同一次 SQL 里用 DB `now()` 计算** —— **过滤与取值来自同一表达式、同一时钟、同一次查询**，结构上杜绝「筛进来却标成 NEW」。（**Q2 裁决**：不引入应用侧 `now`——那会把「SQL↔JS 不一致」换成「应用时钟↔DB 时钟偏斜」。）
+**原则（重要，防回退）**：`publishedAt` 由 **Prisma Client** 写入（**应用时钟，UTC 语义**；`schema.prisma` 里的 `DEFAULT CURRENT_TIMESTAMP` **存在，但 Prisma 写入路径不使用** —— 见 §4.3② 时钟源清单）。故 `ageHours` **必须在同一次 SQL 里用 DB `now()` 计算** —— **过滤与取值来自同一表达式、同一次查询**，结构上杜绝「筛进来却标成 NEW」。（**Q2 裁决**：不引入应用侧 `now`——那只会把一条查询拆成「SQL 过滤 + JS 取值」两处，边界处仍可能不一致。）
+>
+> ⚠️ **前提（可复现性 P13）**：读取端用 DB 的 `now()`、写入端是 Prisma 的 **UTC 语义** ⇒ **只有「DB 会话时区 = UTC」时，二者才落在同一时间轴上**；否则 DB `now()` 随会话时区偏移，与恒为 UTC 的 `publishedAt` 相减会得到**错误**的 `ageHours`。故连接串 / 容器**必须固定 `TimeZone=UTC`**（复现与处置见 §6.7.1 P13）。
 
 **统计 / 列表查询（过滤与取值同一表达式）**：
 ```sql
@@ -322,24 +324,26 @@ function bucketFreshness(ageHours: number): { code: 'JUST_LISTED' | 'NEW' | 'OLD
 
 **必须 `SELECT … AS age_hours` 的位置**：**所有返回物品 DTO 的查询**，含列表 `GET /api/items` **与详情 `GET /api/items/:id`**（否则详情页与列表页各算各的）。
 
-**为什么不用「生成列」或「JS 计算」**：生成列无法引用 `now()`（PG 要求生成列表达式 **immutable**，而 `now()` 是 **stable** → 建表报错 `42P17`，复现见 §6.7.1 P2）；JS 侧算则同时踩「应用时钟 vs DB 时钟偏斜」与「与 SQL 过滤不同源」两个坑。**读时计算 = 零存储、零任务、单一时钟源（DB）、纯函数可单测。**
+**为什么不用「生成列」或「JS 计算」**：生成列无法引用 `now()`（PG 要求生成列表达式 **immutable**，而 `now()` 是 **stable** → 建表报错 `42P17`，复现见 §6.7.1 P2）；JS 侧算则踩「**与 SQL 过滤不同源**」——同一次请求被拆成「SQL 过滤 + JS 取值」两处，边界处（如 `23.99 / 24.00`）易出现「筛进来却标成另一档」。**读时计算 = 零存储、零任务、单一读取时钟源（DB `now()`，前提：会话时区 = UTC，见 P13）、纯函数可单测。**
 
 **② 时间戳与时区**：DB 一律存 **UTC**；展示与聚合按 `Asia/Shanghai` 自然月；月团边界由 `monthRange` 显式回传（见 `api-contract.md` §7）。
 > ⚠️ **前提（可复现性 P4）**：Prisma `DateTime` 在 PG 默认映射为 `timestamp(3)`（**无时区列**），Prisma 按其 UTC 语义读写，故"存 UTC"成立。落地以 `SELECT pg_typeof("publishedAt")` 复核列类型（见 §6.7.1）。
 
 > **Q3：新鲜度不使用任何时区。** 新鲜度是**纯时长**（`now - publishedAt`，两个绝对时刻相减），与 tz **无关**；`Asia/Shanghai` **只**用于看板**自然月聚合**，**二者勿混**——切勿把 `monthRange` 的时区逻辑套到新鲜度上。
 
-**时钟源清单（同一 `Item` 表混用三种时钟，比较时间前必须先确认"谁写的"）**：
+**时钟源清单（同一 `Item` 表混用多种时钟，比较时间前必须先确认"谁写的"；**本表为任务 #15 实测修正版**）**：
 
 | 列 | 默认值来源 | 时钟源 | 备注 |
 |---|---|---|---|
-| `Item.publishedAt` | `DEFAULT CURRENT_TIMESTAMP`（DB） | **DB 时钟** | 新鲜度基准；`ageHours` 必须用 DB `now()` 相减 |
-| 各表 `createdAt` | `DEFAULT CURRENT_TIMESTAMP`（DB） | **DB 时钟** | |
+| `Item.publishedAt` | `DEFAULT CURRENT_TIMESTAMP`（**存在，但 Prisma 写入路径不使用**） | **Prisma Client**（应用时钟，**UTC 语义**） | 新鲜度基准；由 `prisma.item.create` 供值。`ageHours` 用 DB `now()` 相减，**前提：会话时区 = UTC（P13）** |
+| 各表 `createdAt` | `@default(now())`（**存在，但 Prisma 写入路径不使用**） | **Prisma Client**（应用时钟，UTC 语义） | 同 `publishedAt` |
 | `Item.reservedAt` / `Item.archivedAt` | 无默认值 | **应用时钟** | 路由/服务层 `new Date()` 写入 |
 | 各表 `updatedAt`（`@updatedAt`） | Prisma `@updatedAt` | **Prisma Client** | 非 DB 触发器（§6.5.3 P5）；raw UPDATE 不推进 |
 | 会话/审计的"当前时间" | — | **应用时钟** | |
 
-> ⇒ **规则**：凡两个时间相减/比较，**先确认是否同一时钟源**。`publishedAt`(DB) 与 `now()`(DB) **同源** → 可安全相减；**禁止**用应用 `new Date()` 去减 `publishedAt`(DB)（容器间时钟偏斜）。这也是 §4.3① 坚持「`ageHours` 由 SQL 用 DB `now()` 算」的依据。
+> ⇒ **规则（#15 修正）**：`publishedAt` 由 **Prisma（UTC 语义）**写入、读取端用的是 **DB `now()`** —— 二者**只有在「DB 会话时区 = UTC」时才是同一时间轴**（否则 DB `now()` 随会话时区偏移，与恒为 UTC 的 `publishedAt` 相减 ⇒ `ageHours` 静默出错）。故连接串/容器**必须固定 `TimeZone=UTC`**（复现见 §6.7.1 P13）。**禁止**用应用 `new Date()` 去减 `publishedAt`（不同请求/容器的应用时钟差异）。这也是 §4.3① 坚持「`ageHours` 由 SQL 用 DB `now()` 算」的依据。
+> ⇒ **raw INSERT 是唯一会让 `publishedAt` 退化为「随会话时区漂移的 DB 默认值」的路径**：实测（同一事务内 `SET LOCAL TimeZone='Asia/Shanghai'`、同一时刻各插一行、均不显式给 `publishedAt`）—— raw INSERT（走 `DEFAULT CURRENT_TIMESTAMP`）读回 `2026-09-28 19:01:50.618`（**上海墙上时间，+8h**）；`prisma.item.create` 读回 `2026-09-28 11:01:50.63`（**UTC**）。
+> ⇒ **写路径硬约束（与 §6.5.3 P5 合流）**：**含 `@default(now())` / `@updatedAt` 的表，所有写路径必须经 Prisma Client**。理由两条：① raw `UPDATE` **不推进 `updatedAt`** → INC-1 缓存指纹**漏检**；② raw `INSERT` 让 `publishedAt` **随 DB 会话时区漂移** → 新鲜度**静默出错**。另：**raw INSERT 必须自带 `updatedAt`**（该列 `NOT NULL` 且**无 DB 默认值**），否则报 `23502`。
 
 **③ D2 排序收敛**：`status=ACTIVE ORDER BY publishedAt DESC`（新鲜度即时间序）。
 
@@ -541,7 +545,7 @@ FROM "Item"
 WHERE "communityId" = $1 AND status = 'ARCHIVED' AND price IS NOT NULL
 ```
 - **为什么够**：`updatedAt` 是 `@updatedAt` 列，任何价格改动 / 归档动作都会推进它；`count` 捕获集合增删。二者合并覆盖「插入 / 更新 / 删除」三类变更 ⇒ **数据变则指纹变 ⇒ 不返回旧价**。
-  - ⚠️ **前提（可复现性 P5）**：`@updatedAt` 由 **Prisma Client** 维护（**不是 DB 触发器**），故 **`Item` 的所有写路径必须经 Prisma Client**（含归档、改价）；若将来出现 raw `UPDATE "Item" …`，必须在同语句**显式维护 `updatedAt`**，否则指纹**漏检**（细则见 §6.7.1）。
+  - ⚠️ **前提（可复现性 P5）**：`@updatedAt` 由 **Prisma Client** 维护（**不是 DB 触发器**），故 **`Item` 的所有写路径必须经 Prisma Client**（含归档、改价）；若将来出现 raw `UPDATE "Item" …`，必须在同语句**显式维护 `updatedAt`**，否则指纹**漏检**（细则见 §6.7.1）。**（并见 §4.3② 写路径硬约束：同一纪律也覆盖 `publishedAt` / `createdAt`——raw INSERT 会让它们随 DB 会话时区漂移。）**
 - **代价**：① 每次定价请求多一次廉价聚合（归档集小、等值前缀命中索引，毫秒级）；② **命中率下降**——社区内任一条归档变动都会使该社区所有定价缓存条目同时失效。**取舍：正确性 > 命中率**；发布/归档是低频动作，可接受。
 - 指纹取**全社区**归档集（不带 category/tradeType 过滤），更粗但更稳（少一个漏检维度）；过滤维度已含在 `input` 里，故仍可区分。
 - 润色 / FAQ 不依赖社区数据，指纹**维持 `sha256(kind+规范化输入)` 不变**。
@@ -796,8 +800,9 @@ stateDiagram-v2
 | P10 | `cuid()` 默认值由 Prisma 生成（非 PG 默认） | §4.2（schema） | ✅ 可复现（需 PG） | `\d "Item"` 的 `id` 无 DB default；raw INSERT 不给 id 会失败 | 现状全部写入走 Prisma Client；raw INSERT 需自带 `id` |
 | P11 | Next.js 15 以 Route Handlers 作 REST、`next dev` 可起 | §2.1 / §9 T01 | ✅ 可复现（冒烟） | `pnpm next dev` → `GET /api/health` 200 | — |
 | P12 | `percentile_cont` 返回 `double precision`（非 `Decimal`） | §6.5.4 | ✅ **已实测复现（PG16.14）** | `pg_typeof(percentile_cont(…))`；`tests/integration/pricing-query.test.ts` | 已闭环（§6.5.4 按驱动区分表） |
+| P13 | 「DB 会话时区 = UTC」是新鲜度正确性的前提 | §4.3① / §4.3② | ✅ **已实测复现**：`SET LOCAL TimeZone='Asia/Shanghai'` 时 raw INSERT（`DEFAULT CURRENT_TIMESTAMP`）读回 **+8h（上海墙钟）**、`prisma.item.create` 读回 **UTC** ⇒ 二者差 8h | `SHOW TimeZone` 应为 `UTC`；同事务内跑「raw INSERT vs Prisma create」对照实验（应差 8h）；用 `(now() AT TIME ZONE 'UTC')` 与读回值核对 | 若会话时区非 UTC，须在**连接串（`?options=-c TimeZone=UTC`）/ 容器层固定 `TimeZone=UTC`**；否则 DB 默认路径写入的行与 Prisma 写入的行**语义不一致**（`publishedAt` 混两种时间轴 → `ageHours` 静默出错） |
 
-> 说明：P2/P6/P7/P8/P10/P11 属**「可复现的确认型」**——结论正确且有明确验证路径；P3/P4/P9 加了**前提/限定**（不夸大）；P1 区分了环境限制；P5 是**新的设计约束**（写路径纪律）；P12 已闭环。**未发现新增的"不可复现且结论可能错"项。**
+> 说明：P2/P6/P7/P8/P10/P11 属**「可复现的确认型」**——结论正确且有明确验证路径；P3/P4/P9 加了**前提/限定**（不夸大）；P1 区分了环境限制；P5 是**新的设计约束**（写路径纪律）；P12、**P13** 均已闭环/已实测。**未发现新增的"不可复现且结论可能错"项。**
 
 ---
 
