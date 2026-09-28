@@ -161,6 +161,19 @@
 > **定稿决策（图片压缩）**：在**前端**用 `canvas.toBlob()` 统一压到长边 ≤1600px、WebP `quality 0.8` 后再上传（零服务端原生依赖）；服务端仍**独立校验**类型 / 单张 ≤5MB / 数量 ≤6，不信任客户端。定稿**不引入 `sharp`**——原生二进制依赖在本项目已有前车之鉴（Prisma 引擎），1 周内不值得为缩略图赌它；若 P1 有余力再加服务端缩略图。
 > **发布时只提交 `imageKeys[]`**，服务端校验数量 ≤6。
 
+**上传细则（实现口径，逐条可测）**：
+
+| 项 | 口径 |
+|---|---|
+| 请求体 | `multipart/form-data`，字段名恒为 `file`；缺失 / 非文件 → `INVALID_INPUT` |
+| 类型 | **仅** MIME 白名单 `image/jpeg`、`image/png`、`image/webp`（按 `Content-Type` 判定）；其余 → `INVALID_INPUT` |
+| 大小 | 单张 ≤ **5 MiB**（`5 * 1024 * 1024`）。**字节数超限 → `PAYLOAD_TOO_LARGE`(413)**；类型不合法 → `INVALID_INPUT`(400)（两者的错误列同时列出，因为分属不同判定阶段） |
+| `key` | `<randomUUID>.<ext>`，`ext ∈ {jpg,png,webp}`（由 MIME 映射，**不取客户端文件名**）⇒ 客户端无法影响落盘路径，杜绝 `../` 穿越 |
+| `url` | `/uploads/<key>`，由 Next.js 静态托管 `public/uploads/` 直接可访问 |
+| 落盘目录 | `UPLOAD_DIR`（默认 `./public/uploads`）；目录不存在时**递归创建** |
+| 限流 | **每用户 20 次/分、全局 200 次/分**（进程内令牌桶，与 §8 同一实现与**同一诚实前提**：多实例不共享计数，单进程 Demo 够用） |
+| 生命周期 | 上传与发布**解耦**：先传后发 ⇒ 未发布的孤儿文件本期不清理（Demo 可接受，记为已知限制） |
+
 ---
 
 ## 4. 领取申请与预约（核心状态机）
@@ -208,7 +221,7 @@
 | Method | Path | 权限 | 请求 | 响应 | 错误 |
 |---|---|---|---|---|---|
 | GET | `/api/items/:id/messages` | MEMBER | — | `200 { data: MessageDto[] }` | `NOT_FOUND` |
-| POST | `/api/items/:id/messages` | MEMBER | `{ content: string }` | `201 { data: MessageDto }` | `INVALID_INPUT` |
+| POST | `/api/items/:id/messages` | MEMBER（发 AI 建议时为 OWNER） | `{ content: string, senderType?: "USER"\|"AI" }`（缺省 `USER`） | `201 { data: MessageDto }` | `INVALID_INPUT` |
 
 **`MessageDto`**：
 ```json
@@ -223,6 +236,15 @@
 ```
 > **AI 回复建议一键发送**：`POST /api/ai/faq` 生成的 `answer` 可由前端调用本接口提交，此时服务端写 `senderType:"AI"`、`authorId:null`（**仅发布者可发 AI 建议**，返回 `FORBIDDEN` 否则）。
 
+**留言板细则（实现口径）**：
+- **可见范围**：留言**对当前社区全体成员公开**（这正是"避免重复私聊"的需求原意）；非成员 → 403（§0.3 通用码）。
+- **作用域**：`GET`/`POST` 都以 `viewer.currentCommunityId` 校验物品归属，跨社区物品 → `NOT_FOUND`（不泄漏存在性）。
+- **排序 / 上限**：`GET` 按 `createdAt` **升序**（对话流阅读顺序）返回**全量**（`content ≤1000`、单物品留言量在 Demo 尺度可控，故不分页；`ItemDetailDto` 同理内嵌）。
+- **`author` 可为 `null`**：`senderType="AI"` 的行**没有作者外键**（`authorId:null`），故 `MessageDto.author` 为 `UserSummary | null`。前端须以「AI 建议 · 由发布者发送」之类的标签渲染，**不得**伪造为用户。
+- **AI 行的权限推导（唯一权威口径）**：`senderType` 缺省或 `USER` ⇒ 任何成员可发，服务端写 `authorId = viewer.id`；`senderType="AI"` ⇒ **仅物品发布者**可发（`requireOwner`），否则 `FORBIDDEN`，且服务端**强制** `authorId=null`（即使客户端声称是别人）。
+  > 为什么按「发送者是否发布者」而非「内容是否像 AI」判定：`answer` 文本由前端带来，服务端无法验真；把「谁有权把自己的 AI 建议写进自己物品的留言板」这条**关系**作为唯一门槛，既满足需求，又不给非发布者伪造 `AI` 标签的口子。
+- **`content` 校验**：`trim` 后 1–1000 字符（对齐 `@db.VarChar(1000)`），空串 → `INVALID_INPUT`。
+
 ---
 
 ## 6. 收藏 / 通知
@@ -234,9 +256,9 @@
 | POST | `/api/items/:id/favorite` | MEMBER | — | `201 { data: { favorited: true } }` | `CONFLICT`(已收藏) |
 | DELETE | `/api/items/:id/favorite` | MEMBER | — | `200 { data: { favorited: false } }` | `NOT_FOUND` |
 | GET | `/api/me/favorites` | MEMBER | — | `200 { data: ItemDto[] }` | — |
-| GET | `/api/me/items` | MEMBER | query：`status?`(ACTIVE\|RESERVED\|ARCHIVED) | `200 { data: ItemDto[] }` | — |
-| GET | `/api/me/notifications` | MEMBER | query：`unreadOnly?` | `200 { data: NotificationDto[] }` | — |
-| POST | `/api/me/notifications/:id/read` | MEMBER | — | `200 { data: NotificationDto }` | — |
+| GET | `/api/me/items` | MEMBER | query：`status?`(ACTIVE\|RESERVED\|ARCHIVED) | `200 { data: ItemDto[] }` | `INVALID_INPUT` |
+| GET | `/api/me/notifications` | MEMBER | query：`unreadOnly?` | `200 { data: NotificationDto[] }` | `INVALID_INPUT` |
+| POST | `/api/me/notifications/:id/read` | MEMBER | — | `200 { data: NotificationDto }` | `NOT_FOUND` |
 
 **`NotificationDto`**：
 ```json
@@ -244,6 +266,15 @@
 ```
 > `NotificationType` 取值（6 个）：`CLAIM_RECEIVED` / `CLAIM_ACCEPTED` / `CLAIM_REJECTED` / `CLAIM_COMPLETED` / `ITEM_RESERVED` / `ITEM_ARCHIVED`。
 > 原 `ITEM_HIDDEN` / `REPORT_RESOLVED` 随治理模块一并移除。
+
+**收藏 / 我的 / 通知细则（实现口径）**：
+- **收藏幂等边界（明确不放宽）**：`POST` 重复收藏 → `CONFLICT`(409)；`DELETE` 未收藏 → `NOT_FOUND`(404)。前端「收藏」按钮因此**必须以 `ItemDetailDto.viewer.isFavorite` 决定调 POST 还是 DELETE**（而不是"盲调 + 吞错"），这也让竞态在契约层可见。唯一约束 `@@unique([userId,itemId])` 是并发下的最终防线（`P2002` → `CONFLICT`）。
+- **收藏对象的可见性**：`POST`/`DELETE` 前先用 `loadItemInCurrentCommunity` 校验物品在当前会话社区内（跨社区 → `NOT_FOUND`）。
+- **`GET /api/me/favorites`**：返回当前用户在**当前社区**内的收藏，`ItemDto[]` **形状与 `GET /api/items` 完全一致**（同一 `ITEM_SELECT`、同一 `age_hours` 表达式），按**收藏时间倒序**（最近收藏在前）；无分页。
+- **`GET /api/me/items`**：`status` **缺省 = 三种状态全返回**（`ACTIVE`/`RESERVED`/`ARCHIVED`，对应"已归档可查看"的需求）；传值则过滤。按 `publishedAt` **倒序**；无分页。
+- **`GET /api/me/notifications`**：`unreadOnly` 缺省 `false`（全量）；`true` → 仅 `readAt IS NULL`。按 `createdAt` **倒序**，上限 **100** 条（Demo 尺度足够，且避免无界响应；超出部分记为已知限制）。
+- **`POST /api/me/notifications/:id/read`**：**只**能标记**属于自己的**通知；不存在或属于他人 → `NOT_FOUND`(404)（不泄漏他人资源存在性）。**已读是幂等的**：重复调用返回同一 DTO（`readAt` 保持首次值）。响应 `200 { data: NotificationDto }`。
+- **`ITEM_RESERVED` / `ITEM_ARCHIVED` 为预留枚举值**：当前写通知的入口只有 §4 状态机（`CLAIM_RECEIVED`/`CLAIM_ACCEPTED`/`CLAIM_REJECTED`/`CLAIM_COMPLETED`）与 §2 归档（见下）。
 
 ---
 
@@ -270,6 +301,13 @@
 - `mostWantedItem`：`ClaimRequest` 按 `itemId` 分组计数，取「物品非 ARCHIVED 且无 COMPLETED」最大者，无则 `null`。
 - **时区**：DB 存 UTC；聚合按 `Asia/Shanghai` 自然月（`monthRange` 显式回传，便于前端核对）。
 
+**看板细则（实现口径）**：
+- **多租户**：`communityId` 缺省 = 会话社区；**显式传入时必须与会话社区一致**，否则 `FORBIDDEN`（§0.3 红线的常规实现：`assertCurrentCommunity`）。
+- **月界（唯一口径）**：`[本月 1 日 00:00, 下月 1 日 00:00)`，两端都按 `Asia/Shanghai` 解释、再换算成 UTC 瞬间参与比较（`+08:00` 无夏令时，故偏移恒为 `+08:00`）。`monthRange` 以 **ISO 8601 带偏移**字符串回传（示例即口径），**必须与聚合实际使用的边界逐字一致**——前端据此核对，而不是各自再算一遍时区。
+- **`durationMinutes`**：`Math.round((completedAt - publishedAt) / 60000)`，**非负整数**；`fastestItem` 只统计「`publishedAt` 与 `completedAt` 都在同一物品上」的 `COMPLETED` 申请，**同一物品多次成交取最早一次**（"最快被领走"衡量的是发布→首次到手）。并列时按 `durationMinutes` 最小者唯一；再并列按 `id` 升序（保证确定性）。
+- **`wantCount`**：该物品 `ClaimRequest` 的**总行数**（任何状态）——需求原文是"被最多人点击'想要'"，意向表达即申请，故不按状态过滤；并列时取 `wantCount` 最大者中 `publishedAt` 最新的一件（更新鲜的先展示），再并列按 `id` 升序。
+- **空态**：`fastestItem` / `mostWantedItem` 无数据时为 `null`（前端渲染「暂无成交」/「暂无意向」，**不得**显示 0 或伪造条目）。
+
 ---
 
 ## 8. LLM 能力（新增模块）
@@ -282,6 +320,10 @@
 | POST | `/api/ai/pricing` | `{ name, description?, category? }` | `200 { data: PricingResult }` | `INVALID_INPUT`, `RATE_LIMITED` |
 | POST | `/api/ai/polish` | `{ rawText, name?, tradeType? }` | `200 { data: PolishResult }` | `INVALID_INPUT`, `RATE_LIMITED` |
 | POST | `/api/ai/faq` | `{ itemId, question }` | `200 { data: FaqResult }` | `INVALID_INPUT`, `NOT_FOUND`, `RATE_LIMITED` |
+
+> **`/api/ai/faq` 权限例外（明确为 `OWNER`）**：§8 正文声明三个接口都是 `MEMBER`，但 FAQ 的语义是「**卖家**回复建议」，且其产物可被 §5 一键发送进留言板、写成 `senderType:"AI"` 的行——而 §5 已钉死「**仅发布者可发 AI 建议**」。若生成侧对全体成员开放，就只剩"发送"一道门槛，非发布者可以反复榨取"替卖家回答"的建议、并在前端留下误导路径。因此 **`/api/ai/faq` 要求访问者是 `itemId` 的发布者**（`requireOwner`）：物品不在当前会话社区 → `NOT_FOUND`，存在但非本人发布 → `FORBIDDEN`(403，§0.3 通用码)。
+> `pricing` / `polish` **维持 `MEMBER`**：二者发生在**发布之前**（还没物品，无归属可言），是发布者为自己的草稿求建议，不存在同类越权面。
+> 前端相应地只在详情页对 `viewer.isOwner === true` 渲染 FAQ 助手；非发布者不展示入口。
 
 ```json
 // PricingResult（INC-1：升级为工具调用定价；字段只增不改）
