@@ -5,7 +5,7 @@
  * 原则：降级必须**确定性、零依赖、即时** —— 保证断网 / 欠费时三个按钮依然"有反馈、不黑屏"。
  *
  * 输出类型为**模型输出**形状（`*ModelOutput`），不含 `degraded/source/usedTools/toolCalls`；
- * 元信息由上层 `ai.service.ts` 统一附加（`degraded:true, source:'rule'`）。
+ * 元信息由上层 `ai/service.ts` 统一附加（`degraded:true, source:'rule'`）。
  * 所有输出均满足 §6.2 的**容忍边界** schema（保证降级结果也是合法 DTO）。
  */
 import type { PricingRequest, PolishRequest, TradeType } from '@/shared/types';

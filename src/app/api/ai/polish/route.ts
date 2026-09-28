@@ -10,7 +10,7 @@ import { enforceAiRateLimit } from '@/server/ai/rate-limit';
 import { requireMember, requireUser } from '@/server/auth/guard';
 import { getSessionFromRequest } from '@/server/auth/session';
 import { jsonOk, parseJsonBody, withRoute } from '@/server/http';
-import { generatePolish } from '@/server/services/ai.service';
+import { generatePolish } from '@/server/ai/service';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';

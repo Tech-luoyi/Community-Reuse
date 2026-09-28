@@ -1,5 +1,5 @@
 /**
- * LLM 能力编排（`src/server/services/ai.service.ts`）。
+ * LLM 能力编排（`src/server/ai/service.ts`）。
  *
  * 事实源：docs/tech-design-final.md §6.1（网关）、§6.2（prompt/schema）、§6.3（降级）、
  * §6.6.4（降级层级：`source` 与 `usedTools` 正交）；契约 docs/api-contract.md §8。

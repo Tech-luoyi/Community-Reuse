@@ -16,7 +16,7 @@ import { POST as pricingPOST } from '@/app/api/ai/pricing/route';
 import { clearL1, computeCacheKey } from '@/server/ai/cache';
 import { resetAiRateLimit } from '@/server/ai/rate-limit';
 import { prisma } from '@/server/db';
-import { generatePricing } from '@/server/services/ai.service';
+import { generatePricing } from '@/server/ai/service';
 
 import {
   type TenantFixtures,

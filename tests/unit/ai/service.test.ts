@@ -1,7 +1,7 @@
 /**
  * AI 编排服务的单测（**mock 缓存 / `fetch` / 守卫与 prisma，离线**）。
  *
- * 覆盖 `ai.service.ts` 的隐式流程不变量：
+ * 覆盖 `ai/service.ts` 的隐式流程不变量：
  *   - 无 Key ⇒ `degraded:true, source:'rule'` 且 **0 次模型调用**。
  *   - 合法 JSON ⇒ `source:'llm'`；枚举**大小写/空白归一化**（`free`/`Free`/`FREE ` 不触发 REPAIR）。
  *   - 非法 JSON / 非法枚举 ⇒ `REPAIR` **恰好 1 次**；仍失败才降级。
@@ -39,7 +39,7 @@ vi.mock('@/server/db', () => ({
   },
 }));
 
-import { generateFaq, generatePricing, generatePolish } from '@/server/services/ai.service';
+import { generateFaq, generatePricing, generatePolish } from '@/server/ai/service';
 
 const VIEWER = { id: 'u1', nickname: 'n', contactText: null, currentCommunityId: 'c1' };
 
