@@ -1,0 +1,65 @@
+erDiagram
+    users ||--o{ items : "发布(owner)"
+    users ||--o{ wants : "表达意向"
+    users ||--o{ messages : "发言"
+    users ||--o{ transactions : "作为卖家"
+    users ||--o{ transactions : "作为买家"
+    items ||--o{ wants : "收到意向"
+    items ||--o{ messages : "围绕留言"
+    items ||--o| transactions : "成交(1:0..1)"
+
+    users {
+        string   id PK "nanoid"
+        string   nickname "昵称/门牌"
+        string   avatar_color "头像色"
+        string   building "楼栋(可空)"
+        datetime created_at
+    }
+
+    items {
+        string   id PK
+        string   owner_id FK "-> users.id"
+        string   title "物品名"
+        string   description "描述"
+        string   category "品类(可空)"
+        string   trade_mode "free|flexible|priced"
+        int      price_cents "分, priced 时非空"
+        string   image_url "占位图/URL"
+        string   status "available|sold"
+        int      view_count "浏览数"
+        datetime created_at "发布时刻"
+        datetime sold_at "送出时刻(可空)"
+    }
+
+    wants {
+        string   id PK
+        string   item_id FK "-> items.id"
+        string   user_id FK "-> users.id"
+        string   note "附言(可空)"
+        datetime created_at
+    }
+
+    messages {
+        string   id PK
+        string   item_id FK "-> items.id"
+        string   user_id FK "-> users.id (AI时为空)"
+        string   sender_type "user|ai"
+        string   content "留言内容"
+        datetime created_at
+    }
+
+    transactions {
+        string   id PK
+        string   item_id FK "-> items.id (唯一)"
+        string   seller_id FK "-> users.id"
+        string   buyer_id FK "-> users.id (可空)"
+        datetime completed_at "成交时刻"
+    }
+
+    ai_cache {
+        string   id PK
+        string   input_hash "输入指纹(唯一)"
+        string   kind "pricing|polish|faq"
+        string   output_json "缓存结果(JSON字符串)"
+        datetime created_at
+    }

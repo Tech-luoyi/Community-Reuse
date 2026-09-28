@@ -1,0 +1,9 @@
+node_modules
+.next
+out
+coverage
+dist
+package-lock.json
+public/uploads
+# 设计文档由架构师维护，格式化工具有可能改动其内容 —— 显式排除
+docs

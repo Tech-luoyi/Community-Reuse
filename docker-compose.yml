@@ -1,0 +1,22 @@
+# 只跑数据库一个容器（与设计一致：MinIO 已砍，图片走本地 StorageAdapter）
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: community-reuse-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: community
+    ports:
+      - '5432:5432'
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U postgres -d community']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres_data:

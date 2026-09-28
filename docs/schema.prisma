@@ -1,0 +1,221 @@
+// 邻里流转 · 定稿数据模型（事实源 / Single Source of Truth）
+// 架构：Next.js 15 App Router + Prisma + PostgreSQL 16
+// 约束落点约定（D3）：
+//   - DB 层强制：唯一 / 外键 / 非空 / 长度（@db.VarChar）
+//   - DB 层强制（区间/条件，Prisma 无法表达 → 走迁移 SQL）：见 prisma/migrations/*_checks/migration.sql
+//   - 应用层校验：Zod（图片数量、枚举组合、必填联动等）
+// 本文件中的枚举值 / 字段名 / 索引，必须与 docs/er-diagram-final.mermaid 和 docs/api-contract.md 完全一致。
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// 定稿决策（2026-09-28，客户确认）：
+//   · 砍掉「举报 + 管理员隐藏」→ 移除 Report / ReportStatus / Item.hiddenAt
+//   · 随之移除 MemberRole 与 CommunityMember.role —— 举报与治理下线后无任何 ADMIN 使用点，
+//     保留即为死枚举。本期权限模型完全由关系推导：GUEST / MEMBER / OWNER(发布者) / ACCEPTED_APPLICANT。
+//     （若后续要做成员管理，加回 role 枚举是一次普通 migration。）
+
+/// 物品状态机：ACTIVE -> RESERVED -> ARCHIVED（RESERVED 可回退 ACTIVE）
+enum ItemStatus {
+  ACTIVE
+  RESERVED
+  ARCHIVED
+}
+
+/// 交易方式（枚举，避免自由文本导致筛选困难）
+enum TradeType {
+  FREE
+  PAY_WHATEVER
+  FIXED_PRICE
+  OTHER
+}
+
+/// 领取申请状态机：PENDING -> ACCEPTED -> COMPLETED；PENDING -> REJECTED / CANCELED
+enum ClaimStatus {
+  PENDING
+  ACCEPTED
+  REJECTED
+  CANCELED
+  COMPLETED
+}
+
+/// 站内通知类型（D5：由裸 String 改为 enum，约束取值）
+/// 砍掉治理模块后，ITEM_HIDDEN / REPORT_RESOLVED 一并移除（见文件头决策说明）。
+enum NotificationType {
+  CLAIM_RECEIVED
+  CLAIM_ACCEPTED
+  CLAIM_REJECTED
+  CLAIM_COMPLETED
+  ITEM_RESERVED
+  ITEM_ARCHIVED
+}
+
+/// 留言发送者类型（USER=成员；AI=LLM 生成的回复建议，可一键发进留言板）
+enum MessageSenderType {
+  USER
+  AI
+}
+
+/// LLM 能力类型
+enum AiKind {
+  PRICING
+  POLISH
+  FAQ
+}
+
+
+model Community {
+  id         String            @id @default(cuid())
+  name       String            @db.VarChar(60)
+  inviteCode String            @unique
+  createdAt  DateTime          @default(now())
+  updatedAt  DateTime          @updatedAt
+  members    CommunityMember[]
+  items      Item[]
+}
+
+model CommunityMember {
+  id          String     @id @default(cuid())
+  communityId String
+  userId      String
+  joinedAt    DateTime   @default(now())
+  community   Community  @relation(fields: [communityId], references: [id], onDelete: Cascade)
+  user        User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([communityId, userId])
+  @@index([userId])
+}
+
+model User {
+  id            String            @id @default(cuid())
+  nickname      String            @db.VarChar(30)
+  /// D1：联系方式的【单一事实源】。写入路径：PATCH /api/me（传空串等价于清空为 null）。
+  /// 详情接口永不返回；仅当存在一条 ACCEPTED/COMPLETED 的 ClaimRequest
+  /// 时，才向该笔交易的对手方展示（见 api-contract.md §0.3 / §4）。
+  contactText   String?           @db.VarChar(120)
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+  memberships   CommunityMember[]
+  items         Item[]
+  favorites     Favorite[]
+  claimRequests ClaimRequest[]
+  notifications Notification[]
+  messages      Message[]
+}
+
+model Item {
+  id          String     @id @default(cuid())
+  communityId String
+  ownerId     String
+  name        String     @db.VarChar(80)
+  category    String?    @db.VarChar(40)
+  description String     @db.VarChar(2000)
+  tradeType   TradeType
+  price       Decimal?   @db.Decimal(10, 2)
+  status      ItemStatus @default(ACTIVE)
+  publishedAt DateTime   @default(now())
+  reservedAt  DateTime?
+  archivedAt  DateTime?
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  community Community      @relation(fields: [communityId], references: [id])
+  owner     User           @relation(fields: [ownerId], references: [id])
+  images    ItemImage[]
+  claims    ClaimRequest[]
+  favorites Favorite[]
+  messages  Message[]
+
+  // D2：默认列表主查询 = (communityId, status=ACTIVE, publishedAt DESC)
+  // 索引与查询谓词完全匹配（hiddenAt 已随治理模块砍除，不存在残余过滤）
+  @@index([communityId, status, publishedAt])
+  @@index([communityId, tradeType, status])
+  @@index([ownerId, status])
+}
+
+model ItemImage {
+  id        String @id @default(cuid())
+  itemId    String
+  /// StorageAdapter 返回的访问路径（本地实现形如 /uploads/<key>；S3 实现为对象 URL）
+  url       String
+  sortOrder Int    @default(0)
+  item      Item   @relation(fields: [itemId], references: [id], onDelete: Cascade)
+
+  @@index([itemId, sortOrder])
+}
+
+model ClaimRequest {
+  id                String      @id @default(cuid())
+  itemId            String
+  applicantId       String
+  message           String?     @db.VarChar(500)
+  preferredAt       DateTime?
+  preferredLocation String?     @db.VarChar(120)
+  status            ClaimStatus @default(PENDING)
+  createdAt         DateTime    @default(now())
+  updatedAt         DateTime    @updatedAt
+  acceptedAt        DateTime?
+  completedAt       DateTime?
+  item              Item        @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  applicant         User        @relation(fields: [applicantId], references: [id])
+
+  @@index([itemId, status])
+  @@index([applicantId, status])
+}
+
+model Message {
+  id         String            @id @default(cuid())
+  itemId     String
+  /// AI 生成的消息无真实作者（可空）
+  authorId   String?
+  senderType MessageSenderType @default(USER)
+  content    String            @db.VarChar(1000)
+  createdAt  DateTime          @default(now())
+  item       Item              @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  author     User?             @relation(fields: [authorId], references: [id], onDelete: SetNull)
+
+  @@index([itemId, createdAt])
+  @@index([authorId])
+}
+
+model Favorite {
+  id        String   @id @default(cuid())
+  userId    String
+  itemId    String
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  item      Item     @relation(fields: [itemId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, itemId])
+  @@index([userId, createdAt])
+}
+
+model Notification {
+  id        String           @id @default(cuid())
+  userId    String
+  type      NotificationType
+  title     String           @db.VarChar(80)
+  content   String           @db.VarChar(500)
+  readAt    DateTime?
+  createdAt DateTime         @default(now())
+  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, readAt, createdAt])
+}
+
+/// LLM 结果缓存（按输入指纹去重）；进程内 LRU 为 L1，本表为 L2/可观测
+model AiCache {
+  id         String   @id @default(cuid())
+  inputHash  String   @unique
+  kind       AiKind
+  outputJson String   @db.Text
+  createdAt  DateTime @default(now())
+
+  @@index([kind, createdAt])
+}

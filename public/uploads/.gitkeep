@@ -1,0 +1,2 @@
+# StorageAdapter 本地默认落盘目录占位文件。
+# 图片由 `POST /api/uploads` 写入本目录（UPLOAD_DIR 可覆盖）。

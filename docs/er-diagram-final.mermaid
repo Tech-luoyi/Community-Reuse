@@ -1,0 +1,112 @@
+%% 邻里流转 · 定稿 ER 图（考试交付物，可直接截图）
+%% 与 docs/schema.prisma、docs/api-contract.md 三处枚举值/字段名/索引保持一致
+erDiagram
+    Community ||--o{ CommunityMember : "拥有成员"
+    User ||--o{ CommunityMember : "加入(多社区)"
+    Community ||--o{ Item : "包含物品"
+    User ||--o{ Item : "发布(owner)"
+    Item ||--o{ ItemImage : "多图(<=6)"
+    Item ||--o{ ClaimRequest : "收到申请"
+    User ||--o{ ClaimRequest : "发起(applicant)"
+    Item ||--o{ Message : "公开留言"
+    User ||--o{ Message : "作者(可空/AI)"
+    User ||--o{ Favorite : "收藏"
+    Item ||--o{ Favorite : "被收藏"
+    User ||--o{ Notification : "接收通知"
+    %% AiCache（LLM 缓存）为独立表，无外键关系
+    %% 定稿决策：举报 + 管理员隐藏已砍除 → 无 Report 实体，无 role 字段
+
+    Community {
+        string id PK "cuid"
+        string name "小区/楼栋名 <=60"
+        string inviteCode UK "邀请码,唯一"
+        datetime createdAt
+        datetime updatedAt
+    }
+
+    CommunityMember {
+        string id PK
+        string communityId FK "-> Community.id"
+        string userId FK "-> User.id"
+        datetime joinedAt
+    }
+
+    User {
+        string id PK
+        string nickname "<=30"
+        string contactText "可选;仅经被接受的Claim向对手方展示"
+        datetime createdAt
+        datetime updatedAt
+    }
+
+    Item {
+        string id PK
+        string communityId FK "-> Community.id"
+        string ownerId FK "-> User.id"
+        string name "<=80"
+        string category "可空 <=40"
+        string description "<=2000"
+        TradeType tradeType "FREE|PAY_WHATEVER|FIXED_PRICE|OTHER"
+        decimal price "可空;FIXED_PRICE必填 >=0"
+        ItemStatus status "ACTIVE|RESERVED|ARCHIVED"
+        datetime publishedAt "新鲜度/排序基准"
+        datetime reservedAt "可空"
+        datetime archivedAt "可空"
+        datetime createdAt
+        datetime updatedAt
+    }
+
+    ItemImage {
+        string id PK
+        string itemId FK "-> Item.id"
+        string url "StorageAdapter路径"
+        int sortOrder "默认0"
+    }
+
+    ClaimRequest {
+        string id PK
+        string itemId FK "-> Item.id"
+        string applicantId FK "-> User.id"
+        string message "可空 <=500"
+        datetime preferredAt "可空"
+        string preferredLocation "可空 <=120"
+        ClaimStatus status "PENDING|ACCEPTED|REJECTED|CANCELED|COMPLETED"
+        datetime createdAt
+        datetime updatedAt
+        datetime acceptedAt "可空"
+        datetime completedAt "可空"
+    }
+
+    Message {
+        string id PK
+        string itemId FK "-> Item.id"
+        string authorId FK "-> User.id,可空(AI)"
+        MessageSenderType senderType "USER|AI"
+        string content "<=1000"
+        datetime createdAt
+    }
+
+    Favorite {
+        string id PK
+        string userId FK "-> User.id"
+        string itemId FK "-> Item.id"
+        datetime createdAt
+    }
+
+    Notification {
+        string id PK
+        string userId FK "-> User.id"
+        NotificationType type "CLAIM_RECEIVED|CLAIM_ACCEPTED|CLAIM_REJECTED|CLAIM_COMPLETED|ITEM_RESERVED|ITEM_ARCHIVED"
+        string title "<=80"
+        string content "<=500"
+        datetime readAt "可空"
+        datetime createdAt
+    }
+
+    AiCache {
+        string id PK
+        string inputHash UK "输入指纹,唯一"
+        AiKind kind "PRICING|POLISH|FAQ"
+        string outputJson "缓存结果JSON"
+        datetime createdAt
+    }
