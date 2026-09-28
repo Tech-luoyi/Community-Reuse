@@ -8,8 +8,11 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: community
+    # 宿主端口可通过 DB_PORT 覆盖（默认 5432）。
+    # 有些开发机 5432 已被其它项目占用，此时在本地 .env 里设 DB_PORT=55433 即可，
+    # 无需改动本文件（canonical 默认仍是 PG 标准端口 5432）。
     ports:
-      - '5432:5432'
+      - '${DB_PORT:-5432}:5432'
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:

@@ -9,8 +9,7 @@ jobs:
   verify:
     runs-on: ubuntu-latest
 
-    # 预留 PostgreSQL 16 service container：本阶段测试不依赖 DB，
-    # 供后续（迁移 / seed / 聚合查询）单测使用，避免临时改 workflow。
+    # PostgreSQL 16 service container：供集成测试（迁移落地 / D3 兜底 / 索引命中 / §6.5 定价 SQL）真连库使用。
     services:
       postgres:
         image: postgres:16-alpine
@@ -51,3 +50,15 @@ jobs:
 
       - name: Unit tests
         run: npm run test
+
+      - name: Apply DB migrations
+        run: npm run prisma:deploy
+
+      - name: Generate Prisma Client
+        run: npm run prisma:generate
+
+      - name: Seed database
+        run: npm run db:seed
+
+      - name: Integration tests (real PostgreSQL)
+        run: npm run test:integration
