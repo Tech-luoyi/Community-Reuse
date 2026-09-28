@@ -66,13 +66,27 @@ npm run prisma:generate
 # 6) 灌入种子数据（2 个小区 / 4 个用户 / 7 件物品 / 1 条已归档成交记录）
 npm run db:seed
 
-# 7) 启动开发服务器（当前只有 GET /api/health）
+# 7) 启动开发服务器
 npm run dev
 curl -s http://localhost:3000/api/health
 # => {"data":{"db":"ok","llm":false,"storage":"local"}}
 ```
 
 停止数据库：`npm run db:down`。
+
+## 已实现接口（按阶段增量）
+
+| 模块 | 端点                    | 权限   | 说明                                                           |
+| ---- | ----------------------- | ------ | -------------------------------------------------------------- |
+| 健康 | `GET /api/health`       | GUEST  | DB/LLM/存储探测                                                |
+| 鉴权 | `POST /api/auth/join`   | GUEST  | 邀请码加入：建用户+成员，签发 HttpOnly 会话 Cookie             |
+| 鉴权 | `POST /api/auth/switch` | MEMBER | 切换当前社区（重签 Cookie）                                    |
+| 鉴权 | `POST /api/auth/logout` | —      | 清除会话 Cookie                                                |
+| 身份 | `GET` / `PATCH /api/me` | MEMBER | 本人资料；`PATCH` 是 `contactText` **唯一写入口**（空串=清空） |
+
+- 会话：**无服务端会话表**，Cookie 用 `SESSION_SECRET` 做 HMAC-SHA256 签名；**签名不通过一律视为未登录**。
+- 权限：**由关系推导**（`MEMBER` / `OWNER` / `ACCEPTED_APPLICANT`），**无角色列、无 ADMIN**；越权 403、未登录 401。
+- 多租户：**社区只认服务端会话**（`session.currentCommunityId`）；请求体 / 查询串里的 `communityId` 一律与会话比对，不符 403。
 
 ## 数据库说明
 

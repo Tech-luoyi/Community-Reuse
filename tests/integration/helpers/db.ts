@@ -13,11 +13,10 @@ import { resolve } from 'node:path';
 
 import { Pool } from 'pg';
 
-/** 极简 .env 读取（不引第三方依赖）；仅在 DATABASE_URL 缺失时回退到文件。 */
+import { createSessionToken } from '@/server/auth/session';
+
+/** 极简 .env 读取（不引第三方依赖）；只填充【尚未设置】的键，绝不覆盖既有 env。 */
 function loadDotEnv(): void {
-  if (process.env.DATABASE_URL) {
-    return;
-  }
   try {
     const raw = readFileSync(resolve(process.cwd(), '.env'), 'utf8');
     for (const line of raw.split('\n')) {
@@ -42,7 +41,7 @@ function loadDotEnv(): void {
       }
     }
   } catch {
-    // 无 .env：完全依赖外部注入的 DATABASE_URL。
+    // 无 .env：完全依赖外部注入的 DATABASE_URL / SESSION_SECRET。
   }
 }
 
@@ -116,6 +115,126 @@ export async function createFixtures(scope: string): Promise<TestFixtures> {
   );
 
   return { scopePrefix, communityId, userId, itemId };
+}
+
+export interface TenantFixtures {
+  scopePrefix: string;
+  /** 社区甲 */
+  communityAId: string;
+  /** 社区乙 */
+  communityBId: string;
+  /** 仅属于甲，拥有 itemA（OWNER） */
+  ownerId: string;
+  /** 同时属于甲和乙（跨租户行为主体） */
+  dualId: string;
+  /** 仅属于甲（非发布者/非被接受申请人） */
+  strangerId: string;
+  /** 甲内的 ACTIVE 物品（属于 owner） */
+  itemAId: string;
+  /** 乙内的 ACTIVE 物品 */
+  itemBId: string;
+  /** itemA 上 dual 的 ACCEPTED 申请 */
+  acceptedClaimId: string;
+  /** itemA 上 stranger 的 PENDING 申请 */
+  pendingClaimId: string;
+}
+
+/**
+ * 构造多租户场景夹具：两个社区、三个用户（含一个「双社区」用户）、两件物品、两条申请。
+ * 用于验证「社区只认会话」「越权 403」「跨租户不泄漏」。
+ */
+export async function createTenantFixtures(scope: string): Promise<TenantFixtures> {
+  const p = `${FIXTURE_PREFIX}${scope}-`;
+  const communityAId = `${p}cA`;
+  const communityBId = `${p}cB`;
+  const ownerId = `${p}owner`;
+  const dualId = `${p}dual`;
+  const strangerId = `${p}stranger`;
+  const itemAId = `${p}itemA`;
+  const itemBId = `${p}itemB`;
+  const acceptedClaimId = `${p}claimAccepted`;
+  const pendingClaimId = `${p}claimPending`;
+
+  await cleanupFixtures(scope);
+
+  for (const [id, name, code] of [
+    [communityAId, '集成测试甲区', `${p}inviteA`],
+    [communityBId, '集成测试乙区', `${p}inviteB`],
+  ] as const) {
+    await pool.query(
+      `INSERT INTO "Community" ("id","name","inviteCode","createdAt","updatedAt")
+       VALUES ($1, $2, $3, now(), now())`,
+      [id, name, code],
+    );
+  }
+
+  for (const [id, nickname, contact] of [
+    [ownerId, '甲-发布者', '微信 owner-contact'],
+    [dualId, '双社区用户', '微信 dual-contact'],
+    [strangerId, '甲-路人', null],
+  ] as const) {
+    await pool.query(
+      `INSERT INTO "User" ("id","nickname","contactText","createdAt","updatedAt")
+       VALUES ($1, $2, $3, now(), now())`,
+      [id, nickname, contact],
+    );
+  }
+
+  for (const [communityId, userId] of [
+    [communityAId, ownerId],
+    [communityAId, dualId],
+    [communityAId, strangerId],
+    [communityBId, dualId],
+  ] as const) {
+    await pool.query(
+      `INSERT INTO "CommunityMember" ("id","communityId","userId","joinedAt")
+       VALUES ($1, $2, $3, now())`,
+      [`${p}m-${communityId}-${userId}`, communityId, userId],
+    );
+  }
+
+  for (const [id, communityId, owner] of [
+    [itemAId, communityAId, ownerId],
+    [itemBId, communityBId, dualId],
+  ] as const) {
+    await pool.query(
+      `INSERT INTO "Item"
+         ("id","communityId","ownerId","name","description","tradeType","price","status","publishedAt","createdAt","updatedAt")
+       VALUES ($1, $2, $3, $4, $5, 'FREE', NULL, 'ACTIVE', now(), now(), now())`,
+      [id, communityId, owner, `集成测试物品-${id}`, '多租户夹具'],
+    );
+  }
+
+  await pool.query(
+    `INSERT INTO "ClaimRequest"
+       ("id","itemId","applicantId","message","status","createdAt","updatedAt","acceptedAt")
+     VALUES ($1, $2, $3, $4, 'ACCEPTED', now(), now(), now())`,
+    [acceptedClaimId, itemAId, dualId, '集成测试-已接受'],
+  );
+  await pool.query(
+    `INSERT INTO "ClaimRequest"
+       ("id","itemId","applicantId","message","status","createdAt","updatedAt")
+     VALUES ($1, $2, $3, $4, 'PENDING', now(), now())`,
+    [pendingClaimId, itemAId, strangerId, '集成测试-待处理'],
+  );
+
+  return {
+    scopePrefix: p,
+    communityAId,
+    communityBId,
+    ownerId,
+    dualId,
+    strangerId,
+    itemAId,
+    itemBId,
+    acceptedClaimId,
+    pendingClaimId,
+  };
+}
+
+/** 用真实签名逻辑签发一枚会话令牌（供集成测试构造合法 Cookie）。 */
+export function mintSessionToken(userId: string, currentCommunityId: string): string {
+  return createSessionToken({ userId, currentCommunityId });
 }
 
 /** PG 原生错误的可断言子集。 */
