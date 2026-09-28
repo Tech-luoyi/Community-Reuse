@@ -42,7 +42,7 @@ export const NAV_SECTIONS: NavSection[] = [
   {
     eyebrow: '工作台',
     items: [
-      { href: '/items/new', label: '发布物品', icon: PlusCircle, stage: 8 },
+      { href: '/items/new', label: '发布物品', icon: PlusCircle, stage: 'live' },
       { href: '/dashboard', label: '数据看板', icon: LayoutDashboard, stage: 8 },
     ],
   },

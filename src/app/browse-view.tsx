@@ -1,12 +1,13 @@
 'use client';
 
-import { PackageSearch, RefreshCw, SearchX } from 'lucide-react';
+import { PackageSearch, Plus, RefreshCw, SearchX } from 'lucide-react';
+import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import * as React from 'react';
 
 import { ItemRow } from '@/components/features/item-row';
 import { SessionGate } from '@/components/features/session-gate';
-import { Button } from '@/components/ui/button';
+import { Button, buttonVariants } from '@/components/ui/button';
 import { EmptyState } from '@/components/ui/empty-state';
 import { Input, SearchInput } from '@/components/ui/input';
 import { PageHeader } from '@/components/ui/page-header';
@@ -150,9 +151,18 @@ function BrowseList() {
         title="物品集市"
         desc="本小区正在流转的闲置。免费、随意给、定价收在同一列里，按发布先后排。"
         actions={
-          <span className="tnum rounded-md border border-line bg-surface px-2.5 py-1.5 text-[11.5px] text-ink-3">
-            {pagination ? `共 ${pagination.total} 件` : '读取中'}
-          </span>
+          <div className="flex items-center gap-2">
+            <span className="tnum rounded-md border border-line bg-surface px-2.5 py-1.5 text-[11.5px] text-ink-3">
+              {pagination ? `共 ${pagination.total} 件` : '读取中'}
+            </span>
+            <Link
+              href="/items/new"
+              className={cn(buttonVariants({ variant: 'primary', size: 'sm' }))}
+            >
+              <Plus size={14} aria-hidden />
+              发布物品
+            </Link>
+          </div>
         }
       />
 

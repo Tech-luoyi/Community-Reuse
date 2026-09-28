@@ -8,6 +8,7 @@ import { useForm } from 'react-hook-form';
 import { toast } from 'sonner';
 import { z } from 'zod';
 
+import { AiFaqPanel } from '@/components/features/ai-faq-panel';
 import { SessionGate } from '@/components/features/session-gate';
 import { Badge, StatusChip } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -476,7 +477,12 @@ function Detail({ item }: { item: ItemDetailDto }) {
             viewer.canClaim && <ClaimForm itemId={item.id} onDone={() => void detail.refetch()} />
           )}
 
-          {viewer.isOwner && <OwnerActions item={item} />}
+          {viewer.isOwner && (
+            <>
+              <OwnerActions item={item} />
+              <AiFaqPanel itemId={item.id} />
+            </>
+          )}
           {viewer.isOwner && (
             <Panel className="overflow-hidden">
               <PanelHeader

@@ -17,14 +17,20 @@ import { qk } from '@/lib/queries';
 import {
   ClaimDtoSchema,
   CommunitySummarySchema,
+  FaqResultSchema,
   ItemDtoSchema,
   JoinResponseDataSchema,
+  PolishResultSchema,
+  PricingResultSchema,
   UserSelfSchema,
   type CreateClaimRequest,
   type CreateItemRequest,
+  type FaqRequest,
   type JoinRequest,
   type MeResponseData,
   type PatchMeRequest,
+  type PolishRequest,
+  type PricingRequest,
 } from '@/shared/schemas';
 
 const OkSchema = z.object({ ok: z.boolean() });
@@ -142,5 +148,28 @@ export function usePatchMe() {
       queryClient.setQueryData<MeResponseData>(qk.me(), (previous) =>
         previous ? { ...previous, user: result.user } : previous,
       ),
+  });
+}
+
+/**
+ * 三个 LLM 能力都是即时建议、结果不入库，所以既不写缓存也不作废任何查询：
+ * 点一次就是一次真实请求。限流 10 次/分钟/人，RATE_LIMITED 由调用方原样转成文案。
+ */
+export function useAiPricing() {
+  return useMutation({
+    mutationFn: (body: PricingRequest) => api.post('/api/ai/pricing', PricingResultSchema, body),
+  });
+}
+
+export function useAiPolish() {
+  return useMutation({
+    mutationFn: (body: PolishRequest) => api.post('/api/ai/polish', PolishResultSchema, body),
+  });
+}
+
+/** 后端没有校验调用者是否物主（契约 §7），所以这个面板只在前端确认 isOwner 后才挂载。 */
+export function useAiFaq() {
+  return useMutation({
+    mutationFn: (body: FaqRequest) => api.post('/api/ai/faq', FaqResultSchema, body),
   });
 }
