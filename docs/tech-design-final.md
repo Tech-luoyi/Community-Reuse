@@ -116,8 +116,8 @@ flowchart TB
     subgraph App["② Next.js 15 单体进程"]
         direction TB
         RH["Route Handlers /api/**<br/>REST 契约 + Zod 校验 + 会话鉴权"]
-        SVC["服务层 src/server/services/**<br/>item / claim / message / notification / stats / report / ai"]
-        AI["LLM 网关 src/server/ai/**<br/>gateway + prompts + fallback + cache"]
+        SVC["服务层 src/server/{items,claims,messages,notifications,stats,ai}/**<br/>领域目录：每域 service(,sql,mapper)"]
+        AI["LLM 网关（ai 域内）<br/>gateway + prompts + fallback + cache + rate-limit"]
         ST["StorageAdapter<br/>local (默认) | s3 (P2)"]
         RH --> SVC
         SVC --> AI
@@ -191,8 +191,10 @@ community-reuse/
 │  │  ├─ auth/{session.ts,guard.ts}  # Cookie 会话 + requireUser/Member/Owner
 │  │  ├─ freshness.ts            # 新鲜度计算（不落库）
 │  │  ├─ storage/{index.ts,local.ts}   # StorageAdapter（仅本地实现；S3 不做）
-│  │  ├─ services/{item,claim,message,notification,stats,ai}.service.ts
-│  │  └─ ai/{gateway.ts,prompts.ts,fallback.ts,cache.ts}   # ★ LLM 网关
+│  │  ├─ items/{service.ts,sql.ts,mapper.ts}          # 域：物品（查询 SQL + DTO 映射 + 服务）
+│  │  ├─ claims/service.ts                            # 域：领取申请（accept 事务状态机）
+│  │  ├─ messages/service.ts  notifications/service.ts  stats/service.ts
+│  │  └─ ai/{service.ts,gateway.ts,prompts.ts,fallback.ts,cache.ts,rate-limit.ts}   # ★ LLM 域（网关 + 三能力 + INC-1）
 │  ├─ shared/                    # ★ 唯一共享边界（Zod schema + DTO）
 │  │  ├─ schemas.ts  types.ts
 │  ├─ components/                # ① 前端组件（server 层不得引用）
@@ -419,10 +421,10 @@ function bucketFreshness(ageHours: number): { code: 'JUST_LISTED' | 'NEW' | 'OLD
 | 缓存 | L1 进程内 LRU；L2 落 `AiCache` 表。**定价**键 = `sha256(variant + 规范化输入 + 社区数据指纹)`（见 §6.5.3）；润色/FAQ 键维持 `sha256(kind+规范化输入)`。命中即返回，零延迟零成本 |
 | 限流 | 令牌桶：每用户 10 次/分、全局 60 次/分；超限 `RATE_LIMITED` |
 | 成本/延迟 | `max_tokens`：定价 300 / 润色 400 / FAQ 250；**工具样本 ≤8 条**（§6.5.4）；`temperature` 0.3–0.7；**非流式**（均为整块 JSON） |
-| 观测 | 记 `{kind, ok, degraded, source, usedTools, toolCalls, latencyMs, cached}`；状态机**每态**另记 `{state, attempt, latencyMs}`（§6.6.2） |
+| 观测 | **（服务端结构化日志，非响应体）** 记 `{kind, ok, degraded, source, usedTools, toolCalls, latencyMs, cached}`；状态机**每态**另记 `{state, attempt, latencyMs}`（§6.6.2）。响应体只暴露终态 `usedTools` / `toolCalls` |
 
-统一返回：`{ data, degraded: boolean, source: 'llm'|'rule'|'cache', usedTools: boolean, toolCalls: number, latencyMs }`。
-> （INC-1）三接口统一追加 `usedTools` / `toolCalls`；非定价接口恒为 `false` / `0`。**`source` 取值不变**（仍 `'llm'|'rule'|'cache'`）——「哪个引擎产出」与「是否查了社区数据」正交，后者由 `usedTools` 表达（详见 §6.6.4）。
+**统一返回（#17 修正）**：对外响应恒为 `200 { data: <XxxResult> }`（`PricingResult` / `PolishResult` / `FaqResult`）；其中 `degraded` / `source` / `usedTools` / `toolCalls` **是结果体内部的字段（`AiMeta`）**，**不是**顶层信封字段（顶层只有 `data`）——与契约 §8、`src/shared/schemas.ts`（`AiMetaSchema.extend(...)`）一致。**`latencyMs` 不进契约**：与 §6.5.8 的 `toolMode` 同属**服务端结构化日志观测项**（见上「观测」行与 §6.6.2 每态记录），响应体里**没有**它。
+> （INC-1）三接口统一在结果**体内**追加 `usedTools` / `toolCalls`；非定价接口恒为 `false` / `0`。**`source` 取值不变**（仍 `'llm'|'rule'|'cache'`）——「哪个引擎产出」与「是否查了社区数据」正交，后者由 `usedTools` 表达（详见 §6.6.4）。
 
 ### 6.2 三段 Prompt（可直接复制）
 
@@ -757,9 +759,10 @@ stateDiagram-v2
 
 > 全文**依赖具体运行时/版本行为的断言**已做一轮自查，见 §6.7.1 表。
 
-#### 6.7 设计文档 ↔ 契约 一致性扫描（第 1 轮：统一枚举大小写；第 2 轮：端点错误码列收敛）
+#### 6.7 设计文档 ↔ 契约 一致性扫描（第 1 轮：统一枚举大小写；第 2 轮：端点错误码列收敛；第 3 轮：LLM 返回层次 + 服务层目录）
 > 触发（第 1 轮）：工程师实现 `src/shared/schemas.ts` 时撞到「§6.2 A 期望 schema 小写 vs §8 响应示例大写」。此处**全量扫描**同类不一致（枚举取值 / 字段名 / 大小写 / 必填性 / 序列化形状 / 边界）。
 > 触发（第 2 轮，任务 #13 追加）：核对 `GET /api/me` 权限时发现各端点「错误」列对通用码 401/403 的收录**残缺不全、风格不一**（同类：漏记 401/403）——升级为**契约侧系统性归一**（新增 #16）。
+> 触发（第 3 轮，T08 验收追加）：实测 LLM 三接口顶层信封只有 `data`、meta 在结果体内（`dataKeysHasMeta:true`、`schemaOk:true`），撞到 §6.1「统一返回」把它写成顶层字段并多出 `latencyMs`；同时发现服务层目录分裂（`services/*.service.ts` vs 领域目录）——一并收敛（新增 #17）。
 
 | # | 位置 | 设计文档侧 | 契约侧 | 裁决 | 改哪侧 | 理由 |
 |---|---|---|---|---|---|---|
@@ -779,9 +782,11 @@ stateDiagram-v2
 | 14 | `freshness` code | §7.4：`JUST_LISTED/NEW/OLDER` | §2：同 | **一致** | 无 | 逐值核对通过 |
 | 15 | **历史 24h 文档** | `tech-design.md` / `er-diagram.mermaid` / `peer-design-week1.md`：小写 `free\|flexible\|priced`、`trade_mode`、`status=available` | 非定稿 | **不改，标注为已废弃旧案** | 无 | 非事实源；三处定稿一致性只认 `tech-design-final.md` / `schema.prisma` / `api-contract.md` / `er-diagram-final.mermaid` |
 | 16 | 各端点「错误」列对**通用码**（401/403）收录残缺 / 风格不一 | 设计文档**未**逐端点列错误码（无对应列，不适用） | §1/§2/§4/§5/§7 各端点：`FORBIDDEN` 有的端点列、有的不列；`GET /api/me` 只列了 `UNAUTHENTICATED` 漏 `FORBIDDEN`（同类：漏 401/403） | **加 §0.3 全局规则**：错误列一律**只列端点特有码**，通用码 `UNAUTHENTICATED` / `FORBIDDEN` **不重复**；`—` = 无端点特有错误（受守卫端点仍可返 401/403） | **契约侧** | 逐端点补通用码必再漂移；「全局规则 + 只留特有」才可收敛（本轮已按此归一全部端点；设计文档侧无逐端点码列，零改动） |
+| 17 | LLM「统一返回」的**层次**与 `latencyMs` | §6.1：`{ data, degraded, source, usedTools, toolCalls, latencyMs }` —— meta 在 `data` **之外**、且多 `latencyMs` | §8：`200 { data: PricingResult }`，meta 在 **`PricingResult` 内**、全文**无 `latencyMs`**；`schemas.ts` 的 `PricingResultSchema = AiMetaSchema.extend(...)` 同 | **对齐契约**：§6.1 改为「响应恒 `200 { data: <XxxResult> }`，`degraded/source/usedTools/toolCalls` 属结果体**内**的 `AiMeta`」；**`latencyMs` 降级为服务端结构化日志观测项、不进契约** | **设计侧** | 契约与 `src/shared` 边界**两者一致**、实现站在契约侧（同 #1/#16 先例：「契约是对外事实源，改它破坏响应形状」） |
 
 > 结论（**第 1 轮**）：**真正的枚举取值冲突只有 `mode` 一处（#1）**，连带 #2/#3/#4 同源修正；#5–#9 是**有意分层、非缺陷**（已文档化）；#10–#14 **一致**；#15 是**旧案遗留**（勿引用）。该轮修改**仅落 `tech-design-final.md`**，`api-contract.md` **零改动**（其示例本就大写，是事实源）。
 > 结论（**第 2 轮**，任务 #13 追加）：新增 **#16**——各端点「错误」列对通用码 401/403 收录残缺/风格不一。**唯一改动落在契约侧**（新增 §0.3 全局规则 + 归一全部端点错误列，并回填 §0.2 的 `403 = FORBIDDEN` 码定义）。设计文档侧本无逐端点码列，**零改动**。
+> 结论（**第 3 轮**，T08 验收追加）：新增 **#17**——§6.1「统一返回」层次与 `latencyMs`。**改动只落设计侧**（§6.1 对齐契约 §8 / `schemas.ts`；`latencyMs` 与 §6.5.8 的 `toolMode` 同处理），`api-contract.md` **零改动**。另：本轮把 §3.1/§3.2/§9 的 `src/server/services/*.service.ts` 收敛为**领域目录**（`items/`、`claims/`、`messages/`、`notifications/`、`stats/`、`ai/`）——此属**文件清单口径统一**（对齐仓库实际布局），非「两处事实冲突」，故**不单列扫描行**、仅设计侧落地。
 
 #### 6.7.1 全文「依赖具体运行时/版本行为」断言的自查（可复现性）
 > 触发：这是设计文档里**第 4 次**出现「不可复现的技术断言」（前三次：F1 联系方式无写入路径、F3 `prisma validate` 声称通过、F5 时间预算算术；本次为 `Decimal` 措辞）。故对全文做一轮扫描 —— **凡"你凭什么这么说"，必须给得出可复现的验证路径**。
@@ -908,15 +913,15 @@ AppShell
 | **T01** | 工程骨架 | `package.json` `next.config.ts` `tsconfig.json` `tailwind.config.ts` `components.json` `docker-compose.yml` `.env.example` `src/app/{layout,page,globals.css}` `src/server/{db,http,errors}.ts` | — | P0 | `next dev` 起、db 容器通、健康检查 200、shadcn 生效 |
 | **T02** | 数据层 | `prisma/schema.prisma` `prisma/migrations/*_checks/migration.sql` `prisma/seed.ts` `src/shared/{schemas,types}.ts` | T01 | P0 | `prisma validate`+`migrate`+`seed` 通过；CHECK 约束生效；shared 类型两端可用 |
 | **T03** | 多租户与鉴权 | `src/server/auth/{session,guard}.ts` `src/app/api/auth/{join,switch,logout}/route.ts` `src/app/api/me/route.ts` **(GET + PATCH)** `src/app/join/page.tsx` `src/app/me/page.tsx` `src/components/AppShell.tsx` | T02 | P0 | 邀请码加入发 Cookie；越权 403；空间切换生效；**可设置并回显 `contactText`（`PATCH /api/me`，空串清空为 null）** |
-| **T04** | 浏览与检索 | `src/app/api/items/route.ts` `items/[id]/route.ts` `src/server/services/item.service.ts` `src/server/freshness.ts` `src/app/page.tsx` `src/components/{ItemCard,ItemGrid,FreshnessBadge,TradeTypeTag,FilterBar,SearchBox,EmptyState,SkeletonCard}.tsx` `src/hooks/*` | T03 | P0 | 筛选/搜索/排序/分页正确；新鲜度三档正确；空/加载/错误态齐 |
+| **T04** | 浏览与检索 | `src/app/api/items/route.ts` `items/[id]/route.ts` `src/server/items/{service,sql,mapper}.ts` `src/server/freshness.ts` `src/app/page.tsx` `src/components/{ItemCard,ItemGrid,FreshnessBadge,TradeTypeTag,FilterBar,SearchBox,EmptyState,SkeletonCard}.tsx` `src/hooks/*` | T03 | P0 | 筛选/搜索/排序/分页正确；新鲜度三档正确；空/加载/错误态齐 |
 | **T05** | 发布 + 图片上传 | `src/app/api/items/route.ts`(POST) `uploads/route.ts` `src/server/storage/{index,local}.ts` `src/app/items/new/page.tsx` `src/components/{ImageUploader,PublishForm}.tsx` | T04 | P0 | 多图 ≤6 落本地并可回显；非 FIXED_PRICE 价格清空；字段裁剪(D1)生效 |
-| **T06** | 领取申请 + 预约状态机 | `src/app/api/items/[id]/claims/route.ts` `claims/[id]/{accept,reject,cancel,complete}/route.ts` `me/claims/route.ts` `src/server/services/{claim,notification}.service.ts` `src/app/requests/page.tsx` `src/components/ClaimPanel.tsx` | T05 | P0 | accept 事务拒绝其他 PENDING；**并发不出双接受**；联系方式仅对手方可见 |
-| **T07** | 公开留言板 + 通知/归档 | `src/app/api/items/[id]/messages/route.ts` `items/[id]/archive/route.ts` `me/notifications/route.ts` `me/notifications/[id]/read/route.ts` `src/server/services/message.service.ts` `src/components/MessageBoard.tsx` `src/app/{notifications,archive}/page.tsx` | T06 | P0/P1 | 留言公开可读；AI 建议可一键发；归档只读且不物理删 |
-| **T08** | 看板 + LLM 网关 | `src/app/api/stats/community/route.ts` `src/server/services/stats.service.ts` `src/server/ai/{gateway,prompts,fallback,cache}.ts` `src/server/services/ai.service.ts` `src/app/api/ai/{pricing,polish,faq}/route.ts` `src/app/dashboard/page.tsx` `src/components/{StatCard,FastestItemCard,MostWantedCard}.tsx` `src/components/ai/*` | T03 | P0 | 四项指标正确；三接口连通；**无 Key 返回 `degraded:true` 规则结果** |
+| **T06** | 领取申请 + 预约状态机 | `src/app/api/items/[id]/claims/route.ts` `claims/[id]/{accept,reject,cancel,complete}/route.ts` `me/claims/route.ts` `src/server/claims/service.ts` `src/server/notifications/service.ts` `src/app/requests/page.tsx` `src/components/ClaimPanel.tsx` | T05 | P0 | accept 事务拒绝其他 PENDING；**并发不出双接受**；联系方式仅对手方可见 |
+| **T07** | 公开留言板 + 通知/归档 | `src/app/api/items/[id]/messages/route.ts` `items/[id]/archive/route.ts` `me/notifications/route.ts` `me/notifications/[id]/read/route.ts` `src/server/messages/service.ts` `src/components/MessageBoard.tsx` `src/app/{notifications,archive}/page.tsx` | T06 | P0/P1 | 留言公开可读；AI 建议可一键发；归档只读且不物理删 |
+| **T08** | 看板 + LLM 网关 | `src/app/api/stats/community/route.ts` `src/server/stats/service.ts` `src/server/ai/{service,gateway,prompts,fallback,cache,rate-limit}.ts` `src/app/api/ai/{pricing,polish,faq}/route.ts` `src/app/dashboard/page.tsx` `src/components/{StatCard,FastestItemCard,MostWantedCard}.tsx` `src/components/ai/*` | T03 | P0 | 四项指标正确；三接口连通；**无 Key 返回 `degraded:true` 规则结果** |
 | **T09** | 收藏 + 前端图片压缩 + 打磨 | `items/[id]/favorite/route.ts` `me/favorites/route.ts` `src/lib/image.ts`(canvas 压缩) `src/components/ImageUploader.tsx`(接入压缩) `src/app/favorites/page.tsx` 全局 token/动效 | T06 | P1 | 收藏幂等；**前端压缩后单张 ≤~400KB 且长边 ≤1600px，服务端独立校验不被绕过**；响应式无横向溢出 |
 | **T10** | 测试 + 交付物 | `tests/unit/**` `tests/e2e/**` `vitest.config.ts` `playwright.config.ts` `scripts/export-erd.ts` `README.md` `.env.example` | 全部 | P0 | 单测/E2E 通过；`npm run erd` 出图；README 含一键启动+技术栈简介；视频录制完成 |
 | **T12** | **【INC-1】状态机网关** | `src/server/ai/gateway.ts`(重构为显式 FSM) `src/server/ai/machine.ts`(新：**10 态**定义 + `executeTool` 钩子接口/初版 no-op) `src/server/ai/observe.ts`(新：每态观测 + `toolMode`) `tests/unit/ai/machine.test.ts`(新) | T08 | P1 | **10 态**显式且**转移函数完备**（含 F6：`tool_calls ∧ 轮次超限 → REPAIR`；F4：`TOOL_EXECUTE 失败 → CALL_MODEL(去tools)`；PREFETCH 分支）；**每态记 `{state,attempt,latencyMs,withTools}`**；两级预算（6s/1s/**20s**）生效；**终止性单测**：模拟「一直非法 JSON」「一直请求工具」「工具一直超时」「一直不调工具」⇒ 有界终止（≤3 轮模型）；现有三能力（定价/润色/FAQ）**行为零回归** |
-| **T11** | **【INC-1】工具调用定价** | `src/server/ai/tools.ts`(新：`getCommunitySettlementStats` 执行器，**预取与 function-call 共用**) `src/server/ai/prefetch.ts`(新：**§6.5.8 预取保险模式**) `src/server/ai/prompts.ts`(定价档加 `tools` 声明 + 行情注入段) `src/server/services/ai.service.ts`(接线) `src/app/api/ai/pricing/route.ts`(透传 `usedTools`/`toolCalls`) `src/shared/schemas.ts`(`PricingResult` 增 `usedTools`/`toolCalls`) `tests/unit/ai/tools.test.ts`(新) | T08, **T12** | P1 | 模型可经工具取**同小区**成交分布并给出定价；**F4**：工具查询失败 ⇒ **去 tools 恢复轮**（`source:'llm'`、`usedTools:false`），**恢复轮也失败**才 `degraded:true`；**F6**：轮次超限 ⇒ `REPAIR`；**§6.5.8 预取**：模型不调工具时服务端预取并注入（`usedTools:true, toolCalls:1`，`toolMode='prefetch'`，`AI_PRICING_PREFETCH` 默认开）；**跨租户单测**：① 工具 schema 无 `communityId`、② 伪造 `arguments.communityId` 被忽略、③ SQL 恒带 `WHERE communityId=<会话>`（**预取路径同断言**）；缓存指纹含社区数据指纹（数据变则不命中） |
+| **T11** | **【INC-1】工具调用定价** | `src/server/ai/tools.ts`(新：`getCommunitySettlementStats` 执行器，**预取与 function-call 共用**) `src/server/ai/prefetch.ts`(新：**§6.5.8 预取保险模式**) `src/server/ai/prompts.ts`(定价档加 `tools` 声明 + 行情注入段) `src/server/ai/service.ts`(接线) `src/app/api/ai/pricing/route.ts`(透传 `usedTools`/`toolCalls`) `src/shared/schemas.ts`(`PricingResult` 增 `usedTools`/`toolCalls`) `tests/unit/ai/tools.test.ts`(新) | T08, **T12** | P1 | 模型可经工具取**同小区**成交分布并给出定价；**F4**：工具查询失败 ⇒ **去 tools 恢复轮**（`source:'llm'`、`usedTools:false`），**恢复轮也失败**才 `degraded:true`；**F6**：轮次超限 ⇒ `REPAIR`；**§6.5.8 预取**：模型不调工具时服务端预取并注入（`usedTools:true, toolCalls:1`，`toolMode='prefetch'`，`AI_PRICING_PREFETCH` 默认开）；**跨租户单测**：① 工具 schema 无 `communityId`、② 伪造 `arguments.communityId` 被忽略、③ SQL 恒带 `WHERE communityId=<会话>`（**预取路径同断言**）；缓存指纹含社区数据指纹（数据变则不命中） |
 
 **INC-1 任务说明**：T12 为**纯重构**（用现有三能力即可验证，不依赖 T11），T11 建立在 T12 的 FSM 之上 ⇒ **串行 `T12 → T11`**，两者均可并入原 D6（LLM 日）执行；若单 agent 无余量，**T12 优先于 T11**（前者是加分项「状态图」且是后者地基）。
 
