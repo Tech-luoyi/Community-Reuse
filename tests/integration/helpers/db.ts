@@ -237,6 +237,58 @@ export function mintSessionToken(userId: string, currentCommunityId: string): st
   return createSessionToken({ userId, currentCommunityId });
 }
 
+export interface InsertItemSpec {
+  /** id 后缀（最终 id = `${FIXTURE_PREFIX}${scope}-${key}`，随 cleanupFixtures 一起清理）。 */
+  key: string;
+  communityId: string;
+  ownerId: string;
+  name?: string;
+  description?: string;
+  category?: string | null;
+  tradeType?: string;
+  price?: number | null;
+  status?: string;
+  /** `publishedAt = now() - N hours`（DB 时钟，便于新鲜度分桶断言）。 */
+  publishedAtOffsetHours?: number;
+}
+
+/** 插入一件测试物品（`publishedAt` 由 DB `now()` 相对偏移写入）。 */
+export async function insertItem(scope: string, spec: InsertItemSpec): Promise<string> {
+  const id = `${FIXTURE_PREFIX}${scope}-${spec.key}`;
+  await pool.query(
+    `INSERT INTO "Item"
+       ("id","communityId","ownerId","name","description","category","tradeType","price","status","publishedAt","createdAt","updatedAt")
+     VALUES ($1, $2, $3, $4, $5, $6, $7::"TradeType", $8, $9::"ItemStatus",
+             now() - ($10 || ' hours')::interval, now(), now())`,
+    [
+      id,
+      spec.communityId,
+      spec.ownerId,
+      spec.name ?? '测试物品',
+      spec.description ?? '测试描述',
+      spec.category ?? null,
+      spec.tradeType ?? 'FREE',
+      spec.price ?? null,
+      spec.status ?? 'ACTIVE',
+      String(spec.publishedAtOffsetHours ?? 0),
+    ],
+  );
+  return id;
+}
+
+/** 插入一条收藏（`Favorite` 的 `@@unique([userId,itemId])` 保证不重复）。 */
+export async function insertFavorite(
+  scope: string,
+  key: string,
+  userId: string,
+  itemId: string,
+): Promise<void> {
+  await pool.query(
+    `INSERT INTO "Favorite" ("id","userId","itemId","createdAt") VALUES ($1, $2, $3, now())`,
+    [`${FIXTURE_PREFIX}${scope}-${key}`, userId, itemId],
+  );
+}
+
 /** PG 原生错误的可断言子集。 */
 export interface PgErrorShape {
   code: string;

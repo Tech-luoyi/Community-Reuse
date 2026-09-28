@@ -13,6 +13,8 @@
  *
  * 越权一律 403（FORBIDDEN）；未登录一律 401（UNAUTHENTICATED）；跨社区访问资源按 404 处理（不泄漏存在性）。
  */
+import type { ItemStatus, Prisma, TradeType } from '@prisma/client';
+
 import { prisma } from '@/server/db';
 import { errors } from '@/server/errors';
 
@@ -77,14 +79,28 @@ export function assertCurrentCommunity(viewer: Viewer, communityId: string): voi
   }
 }
 
+/** 经守卫加载的当前社区内的物品（含改价不变式所需的 tradeType / price）。 */
+export interface GuardedItem {
+  id: string;
+  ownerId: string;
+  communityId: string;
+  status: ItemStatus;
+  tradeType: TradeType;
+  price: Prisma.Decimal | null;
+}
+
 /** 当前社区内的物品（不存在或跨社区均按 404，不泄漏跨租户存在性）。 */
-async function loadItemInCurrentCommunity(
-  viewer: Viewer,
-  itemId: string,
-): Promise<{ id: string; ownerId: string; communityId: string; status: string }> {
+async function loadItemInCurrentCommunity(viewer: Viewer, itemId: string): Promise<GuardedItem> {
   const item = await prisma.item.findUnique({
     where: { id: itemId },
-    select: { id: true, ownerId: true, communityId: true, status: true },
+    select: {
+      id: true,
+      ownerId: true,
+      communityId: true,
+      status: true,
+      tradeType: true,
+      price: true,
+    },
   });
   if (!item || item.communityId !== viewer.currentCommunityId) {
     throw errors.notFound('物品不存在');
@@ -96,10 +112,7 @@ async function loadItemInCurrentCommunity(
  * 要求访问者是该物品的**发布者**（且物品在会话社区内）。
  * @throws AppError NOT_FOUND（物品不存在 / 跨社区）| FORBIDDEN（非发布者）
  */
-export async function requireOwner(
-  viewer: Viewer,
-  itemId: string,
-): Promise<{ id: string; ownerId: string; communityId: string; status: string }> {
+export async function requireOwner(viewer: Viewer, itemId: string): Promise<GuardedItem> {
   const item = await loadItemInCurrentCommunity(viewer, itemId);
   if (item.ownerId !== viewer.id) {
     throw errors.forbidden('只有发布者可以执行该操作');
