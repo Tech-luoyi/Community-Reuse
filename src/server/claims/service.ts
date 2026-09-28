@@ -11,7 +11,7 @@
  *   - **通知**：`CLAIM_RECEIVED`/`CLAIM_ACCEPTED`/`CLAIM_REJECTED`/`CLAIM_COMPLETED`；
  *     `ITEM_RESERVED`/`ITEM_ARCHIVED` 枚举值**预留**（本轮不使用）。
  */
-import type { Prisma } from '@prisma/client';
+import { Prisma } from '@prisma/client';
 
 import type { ClaimDto, ClaimListQuery, CreateClaimRequest } from '@/shared/types';
 
@@ -106,10 +106,36 @@ async function lockItemStatus(
 }
 
 /**
+ * 判定是否为「同用户同物品已有有效 PENDING 申请」触发的**唯一冲突**（DB 部分唯一索引兜底）。
+ *
+ * 实测形状（迁移 0002 的 `ClaimRequest_itemId_applicantId_pending_key` 触发时）：
+ *   - `error instanceof Prisma.PrismaClientKnownRequestError === true`
+ *   - `error.code === 'P2002'`
+ *   - `error.meta === { modelName: 'ClaimRequest', target: ['itemId', 'applicantId'] }`
+ * 仅**精确匹配**该形状，避免把其它故障（如连接中断）一并吞成 409。
+ */
+function isPendingClaimUniqueViolation(error: unknown): boolean {
+  if (!(error instanceof Prisma.PrismaClientKnownRequestError)) {
+    return false;
+  }
+  if (error.code !== 'P2002') {
+    return false;
+  }
+  const target = (error.meta as { target?: unknown } | undefined)?.target;
+  return Array.isArray(target) && target.includes('itemId') && target.includes('applicantId');
+}
+
+/**
  * 提交领取申请（§4）。
- * - 物品不在会话社区 → 404；发布者申请自己的物品 → 403；
+ * - 物品不在会话社区 → 404；发布者申请自己的物品 → 403。
+ * - **重复断言在事务内 + 物品行锁**（修复并发重复申请竞态）：事务内顺序固定为
+ *   ① 锁物品行 → ② 复校验物品仍 `ACTIVE` → ③ 查同申请人 `PENDING` → ④ 建申请 + 通知 owner。
  *   物品非 `ACTIVE`、或已有同申请人 `PENDING` → 409。
- * - 事务内：建 `PENDING` 申请 + 给物品 owner 写一条 `CLAIM_RECEIVED`。
+ * - 锁序与 `accept`/`reject`/`cancel`/`complete` 一致（恒为「先 `Item` 行、后 `ClaimRequest`」），
+ *   不会交叉死锁。
+ * - **DB 兜底**：即使应用的 check-then-act 被绕过，迁移 0002 的部分唯一索引
+ *   `ClaimRequest_itemId_applicantId_pending_key` 也会拒绝第二条 `PENDING`；其唯一冲突
+ *   （实测 `P2002`）在此归一化为 409 `CLAIM_CONFLICT`。
  */
 export async function submitClaim(
   viewer: Viewer,
@@ -118,41 +144,59 @@ export async function submitClaim(
 ): Promise<ClaimDto> {
   const item = await loadItemInCurrentCommunity(viewer, itemId);
   if (item.ownerId === viewer.id) {
+    // ownerId 不会变 → 可留在事务外。
     throw errors.forbidden('不能申请自己发布的物品');
   }
   if (item.status !== 'ACTIVE') {
+    // 快路径（非权威）：权威校验在事务内拿到物品行锁后进行。
     throw errors.claimConflict('物品当前不可申请');
   }
-  const existing = await prisma.claimRequest.findFirst({
-    where: { itemId, applicantId: viewer.id, status: 'PENDING' },
-    select: { id: true },
-  });
-  if (existing) {
-    throw errors.claimConflict('你已提交过待处理的申请');
-  }
 
-  const createdId = await prisma.$transaction(async (tx) => {
-    const claim = await tx.claimRequest.create({
-      data: {
-        itemId,
-        applicantId: viewer.id,
-        message: emptyToNull(input.message),
-        preferredAt: input.preferredAt === undefined ? null : new Date(input.preferredAt),
-        preferredLocation: emptyToNull(input.preferredLocation),
-        status: 'PENDING',
-      },
-      select: { id: true },
+  let createdId: string;
+  try {
+    createdId = await prisma.$transaction(async (tx) => {
+      // ① 先锁物品行（所有 claim 转移的统一点；锁序恒为 Item → ClaimRequest）。
+      const itemStatus = await lockItemStatus(tx, itemId);
+      // ② 事务内复校验：快路径通过后，物品可能已被并发 accept 置为 RESERVED。
+      if (itemStatus !== 'ACTIVE') {
+        throw errors.claimConflict('物品当前不可申请');
+      }
+      // ③ 事务内查重复（在物品行锁保护下 → check-then-act 不再是竞态）。
+      const existing = await tx.claimRequest.findFirst({
+        where: { itemId, applicantId: viewer.id, status: 'PENDING' },
+        select: { id: true },
+      });
+      if (existing) {
+        throw errors.claimConflict('你已提交过待处理的申请');
+      }
+      // ④ 建 PENDING 申请 + 给 owner 写 CLAIM_RECEIVED。
+      const claim = await tx.claimRequest.create({
+        data: {
+          itemId,
+          applicantId: viewer.id,
+          message: emptyToNull(input.message),
+          preferredAt: input.preferredAt === undefined ? null : new Date(input.preferredAt),
+          preferredLocation: emptyToNull(input.preferredLocation),
+          status: 'PENDING',
+        },
+        select: { id: true },
+      });
+      await tx.notification.create({
+        data: {
+          userId: item.ownerId,
+          type: 'CLAIM_RECEIVED',
+          title: '收到新的领取申请',
+          content: `「${item.name}」收到一条新的领取申请，请及时处理。`,
+        },
+      });
+      return claim.id;
     });
-    await tx.notification.create({
-      data: {
-        userId: item.ownerId,
-        type: 'CLAIM_RECEIVED',
-        title: '收到新的领取申请',
-        content: `「${item.name}」收到一条新的领取申请，请及时处理。`,
-      },
-    });
-    return claim.id;
-  });
+  } catch (error) {
+    if (isPendingClaimUniqueViolation(error)) {
+      throw errors.claimConflict('你已提交过待处理的申请');
+    }
+    throw error;
+  }
 
   const row = await loadClaimInCurrentCommunity(viewer, createdId);
   return toClaimDto(row, viewer.id);
