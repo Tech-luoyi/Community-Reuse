@@ -6,6 +6,7 @@
 > 交付载体：可本地一键运行的全栈应用 + 5 分钟 Demo 视频 + 数据库 ER 图 + 技术栈简介。
 > 配套文件（三处枚举/字段/索引必须一致）：
 > - `docs/schema.prisma`（事实源；**已用 Prisma 官方 schema 引擎独立校验通过** —— `validate` 返回 valid、`get_dmmf` 完整解析出 10 模型 / 6 enum / 89 字段。落地时请再以本地 `pnpm prisma validate` 复现一次）
+>   - ⚠️ **复现性标注**：**模型/枚举/字段计数可离线复现**（纯文本解析 = 10/6/89，已复核 ✓）；「引擎 validate 通过」**依赖可运行的 Prisma Rust 引擎**，本设计沙箱因引擎被 `SIGKILL` 无法复现，需在可用环境跑 `pnpm prisma validate` + `pnpm prisma get-dmmf` 复核（见 §6.7.1 P1）。
 > - `docs/er-diagram-final.mermaid`（考试交付 ER 图）
 > - `docs/api-contract.md`（独立 REST 契约，解耦证据）
 >
@@ -286,18 +287,59 @@ stateDiagram-v2
 
 ### 4.3 关键设计点
 
-**① 新鲜度：计算 vs 存字段 → 结论：读时计算，不落库**
+**① 新鲜度：计算 vs 存字段 → 结论：读时计算，不落库；且 `ageHours` 是「SQL 查询结果列」，不是 JS 计算字段**
+
+**原则（重要，防回退）**：`publishedAt` 由 **DB 时钟**写入（`DEFAULT CURRENT_TIMESTAMP`，见 §4.3② 时钟源清单）。故 `ageHours` **必须在同一次 SQL 里用 DB `now()` 计算** —— **过滤与取值来自同一表达式、同一时钟、同一次查询**，结构上杜绝「筛进来却标成 NEW」。（**Q2 裁决**：不引入应用侧 `now`——那会把「SQL↔JS 不一致」换成「应用时钟↔DB 时钟偏斜」。）
+
+**统计 / 列表查询（过滤与取值同一表达式）**：
+```sql
+SELECT …,
+       GREATEST(0, EXTRACT(EPOCH FROM (now() - "publishedAt")) / 3600.0) AS age_hours
+  FROM "Item"
+ WHERE "communityId" = $1 AND status = 'ACTIVE'
+   -- freshness 过滤与上面的取值同源同钟：
+   AND ($2::text IS NULL
+        OR ($2 = 'JUST_LISTED' AND now() - "publishedAt" <  interval '24 hours')
+        OR ($2 = 'NEW'         AND now() - "publishedAt" >= interval '24 hours'
+                               AND now() - "publishedAt" <  interval '72 hours')
+        OR ($2 = 'OLDER'       AND now() - "publishedAt" >= interval '72 hours'))
+ ORDER BY "publishedAt" DESC;
+```
+> **Q4**：`GREATEST(0, …)` 把未来 `publishedAt`（时钟偏移/脏数据）在 **SQL 侧** clamp 到 `0` → 落 JUST_LISTED（JS 层无需再 `Math.max`）。
+
+**分桶：纯函数，内部不得出现 `Date.now()` / `new Date()`**
 ```ts
-function getFreshness(publishedAt: Date, now = new Date()) {
-  const ageHours = (now.getTime() - publishedAt.getTime()) / 3_600_000;
-  if (ageHours < 24) return { code: 'JUST_LISTED', label: '刚上架', ageHours };
-  if (ageHours < 72) return { code: 'NEW',        label: '新上架', ageHours };
-  return { code: 'OLDER', label: `已上架 ${Math.floor(ageHours / 24)} 天`, ageHours };
+// src/server/freshness.ts —— 只吃 ageHours，不碰时钟
+function bucketFreshness(ageHours: number): { code: 'JUST_LISTED' | 'NEW' | 'OLDER'; label: string } {
+  if (ageHours < 24) return { code: 'JUST_LISTED', label: '刚上架' };          // [0,24)
+  if (ageHours < 72) return { code: 'NEW',        label: '新上架' };          // [24,72)
+  return { code: 'OLDER', label: `已上架 ${Math.floor(ageHours / 24)} 天` };   // [72,∞)
 }
 ```
-理由：存字段需定时任务刷新且与 `publishedAt` 冗余易不一致；PG 生成列无法引用 `now()`（非 immutable）。读时计算零存储、零任务、永远正确，逻辑集中一处可单测。
+> **签名变更**：由 `getFreshness(publishedAt, now = new Date())` 改为 **`bucketFreshness(ageHours)`**（**Q2**）。分桶是纯函数 ⇒ 单测无需 mock 时间。
+
+**边界（半开区间，Q1 写死）**：`[0,24) → JUST_LISTED`、`[24,72) → NEW`、`[72,∞) → OLDER`。即 **24h 整点 → NEW，72h 整点 → OLDER**；需求原文「24 小时内」按此**代码口径**理解。单测**钉死四值**：`23.99→JUST_LISTED / 24.00→NEW / 71.99→NEW / 72.00→OLDER`（另加未来 `publishedAt → 0 → JUST_LISTED`）。
+
+**必须 `SELECT … AS age_hours` 的位置**：**所有返回物品 DTO 的查询**，含列表 `GET /api/items` **与详情 `GET /api/items/:id`**（否则详情页与列表页各算各的）。
+
+**为什么不用「生成列」或「JS 计算」**：生成列无法引用 `now()`（PG 要求生成列表达式 **immutable**，而 `now()` 是 **stable** → 建表报错 `42P17`，复现见 §6.7.1 P2）；JS 侧算则同时踩「应用时钟 vs DB 时钟偏斜」与「与 SQL 过滤不同源」两个坑。**读时计算 = 零存储、零任务、单一时钟源（DB）、纯函数可单测。**
 
 **② 时间戳与时区**：DB 一律存 **UTC**；展示与聚合按 `Asia/Shanghai` 自然月；月团边界由 `monthRange` 显式回传（见 `api-contract.md` §7）。
+> ⚠️ **前提（可复现性 P4）**：Prisma `DateTime` 在 PG 默认映射为 `timestamp(3)`（**无时区列**），Prisma 按其 UTC 语义读写，故"存 UTC"成立。落地以 `SELECT pg_typeof("publishedAt")` 复核列类型（见 §6.7.1）。
+
+> **Q3：新鲜度不使用任何时区。** 新鲜度是**纯时长**（`now - publishedAt`，两个绝对时刻相减），与 tz **无关**；`Asia/Shanghai` **只**用于看板**自然月聚合**，**二者勿混**——切勿把 `monthRange` 的时区逻辑套到新鲜度上。
+
+**时钟源清单（同一 `Item` 表混用三种时钟，比较时间前必须先确认"谁写的"）**：
+
+| 列 | 默认值来源 | 时钟源 | 备注 |
+|---|---|---|---|
+| `Item.publishedAt` | `DEFAULT CURRENT_TIMESTAMP`（DB） | **DB 时钟** | 新鲜度基准；`ageHours` 必须用 DB `now()` 相减 |
+| 各表 `createdAt` | `DEFAULT CURRENT_TIMESTAMP`（DB） | **DB 时钟** | |
+| `Item.reservedAt` / `Item.archivedAt` | 无默认值 | **应用时钟** | 路由/服务层 `new Date()` 写入 |
+| 各表 `updatedAt`（`@updatedAt`） | Prisma `@updatedAt` | **Prisma Client** | 非 DB 触发器（§6.5.3 P5）；raw UPDATE 不推进 |
+| 会话/审计的"当前时间" | — | **应用时钟** | |
+
+> ⇒ **规则**：凡两个时间相减/比较，**先确认是否同一时钟源**。`publishedAt`(DB) 与 `now()`(DB) **同源** → 可安全相减；**禁止**用应用 `new Date()` 去减 `publishedAt`(DB)（容器间时钟偏斜）。这也是 §4.3① 坚持「`ageHours` 由 SQL 用 DB `now()` 算」的依据。
 
 **③ D2 排序收敛**：`status=ACTIVE ORDER BY publishedAt DESC`（新鲜度即时间序）。
 
@@ -493,6 +535,7 @@ FROM "Item"
 WHERE "communityId" = $1 AND status = 'ARCHIVED' AND price IS NOT NULL
 ```
 - **为什么够**：`updatedAt` 是 `@updatedAt` 列，任何价格改动 / 归档动作都会推进它；`count` 捕获集合增删。二者合并覆盖「插入 / 更新 / 删除」三类变更 ⇒ **数据变则指纹变 ⇒ 不返回旧价**。
+  - ⚠️ **前提（可复现性 P5）**：`@updatedAt` 由 **Prisma Client** 维护（**不是 DB 触发器**），故 **`Item` 的所有写路径必须经 Prisma Client**（含归档、改价）；若将来出现 raw `UPDATE "Item" …`，必须在同语句**显式维护 `updatedAt`**，否则指纹**漏检**（细则见 §6.7.1）。
 - **代价**：① 每次定价请求多一次廉价聚合（归档集小、等值前缀命中索引，毫秒级）；② **命中率下降**——社区内任一条归档变动都会使该社区所有定价缓存条目同时失效。**取舍：正确性 > 命中率**；发布/归档是低频动作，可接受。
 - 指纹取**全社区**归档集（不带 category/tradeType 过滤），更粗但更稳（少一个漏检维度）；过滤维度已含在 `input` 里，故仍可区分。
 - 润色 / FAQ 不依赖社区数据，指纹**维持 `sha256(kind+规范化输入)` 不变**。
@@ -515,7 +558,16 @@ WHERE "communityId" = $1 AND status = 'ARCHIVED' AND price IS NOT NULL
   AND ($2::text IS NULL OR category = $2)
   AND ($3::text IS NULL OR "tradeType" = $3::"TradeType")
 ```
-（`Decimal` 结果在服务端转 `number` 后入 prompt。）
+**统计量返回类型（按驱动区分；已实测 PG `16.14 on aarch64-musl`）**：`percentile_cont` 在 PG 只有 `float8`/`interval` 两个 variant（**没有 `numeric`**），对 `numeric` 列会**隐式转 `double precision`**；只有对 `numeric` 列做 `MIN/MAX` 才返回 `numeric`。故此前「`Decimal` 结果在服务端转 `number`」的说法**不准确**，正确区分如下：
+
+| 列 | `pg_typeof`（实测） | Prisma `$queryRaw` 得到 | 需转 `number`? | node-postgres(`pg`) 得到 | 需转 `number`? |
+|---|---|---|---|---|---|
+| `min` / `max` | `numeric` | `Prisma.Decimal` | **是**（`.toNumber()`） | `string` | **是**（`Number()`） |
+| `p25` / `median` / `p75` | `double precision` | `number` | 否 | `number` | 否 |
+| `count`（`COUNT(*)::int`） | `integer` | `number` | 否 | `number` | 否 |
+
+> 服务端只对 `min` / `max` 做一次显式数值化（Prisma 下 `.toNumber()`；`pg` 下 `Number()`）后入 prompt；`p25/median/p75` 已是 JS `number`，**无需再转**。
+> **验证路径**：`tests/integration/pricing-query.test.ts` 双向断言 `pg_typeof(percentile_cont(0.50)…) === 'double precision'`、`pg_typeof(MIN(price)) === 'numeric'`、`pg_typeof(COUNT(*)::int) === 'integer'`，并断言 `pg` 驱动下 `typeof median === 'number'` / `typeof min === 'string'`。**Prisma 侧映射**（`numeric→Decimal`、`float8/int4→number`）由 Prisma 类型映射规则决定，未在本沙箱直连 Prisma 复跑——验证方法见 §6.7.1 自查表 P3。
 
 #### 6.5.5 工具 JSON schema（全文，可直接粘贴）
 ```json
@@ -688,10 +740,12 @@ stateDiagram-v2
 有向依赖图见 §9。
 
 #### 6.6.6 本轮增量的不确定项（诚实标注 + 验证方法）
-1. **PG `percentile_cont` 返回 `Decimal`**：需在服务层转 `number` 后入 prompt；**未实测**（设计沙箱无 DB）。验证：`tests/unit/ai/tools.test.ts` 断言 `typeof median === 'number'`。
+1. **PG `percentile_cont` 返回类型** —— ✅ **已实测闭环（PG `16.14 on aarch64-musl`）**：返回 **`double precision`（float8），不是 `Decimal`/`numeric`**；只有 `MIN/MAX`（numeric 列）为 `numeric`。§6.5.4 原措辞（"`Decimal` 结果转 `number`"）已按**驱动区分**修正为表。复现：`tests/integration/pricing-query.test.ts` 的 `pg_typeof(...)` 断言（`RUN_INTEGRATION=1`）。
 2. **DeepSeek 是否稳定返回 `tool_calls`**：**未实测**。若不稳定 → 走 §6.5.8 预取保险模式（`toolMode='prefetch'`，仍演示「读了库」），**不阻塞交付**。验证：T11 联调抓一次原始响应体。
 3. **`updatedAt` 抖动敏感性**：任何字段改动都会推进 `updatedAt`，使该社区全部定价缓存失效、命中率可能低于预期。**不影响正确性**（只降命中率）。若演示发现过低，可收窄指纹为「仅 `price`/`archivedAt` 的 max」——优化项，非正确性项。
 4. **`TOTAL_DEADLINE_MS=20000` 的用户感知**：典型 3–7s，20s 仅尾部硬闸；若产品坚持 15s 上限，按 §6.6.3 退路把每轮降到 4.5s。
+
+> 全文**依赖具体运行时/版本行为的断言**已做一轮自查，见 §6.7.1 表。
 
 #### 6.7 设计文档 ↔ 契约 一致性扫描（本轮附：统一枚举大小写）
 > 触发：工程师实现 `src/shared/schemas.ts` 时撞到「§6.2 A 期望 schema 小写 vs §8 响应示例大写」。此处**全量扫描**同类不一致（枚举取值 / 字段名 / 大小写 / 必填性 / 序列化形状 / 边界）。
@@ -715,6 +769,26 @@ stateDiagram-v2
 | 15 | **历史 24h 文档** | `tech-design.md` / `er-diagram.mermaid` / `peer-design-week1.md`：小写 `free\|flexible\|priced`、`trade_mode`、`status=available` | 非定稿 | **不改，标注为已废弃旧案** | 无 | 非事实源；三处定稿一致性只认 `tech-design-final.md` / `schema.prisma` / `api-contract.md` / `er-diagram-final.mermaid` |
 
 > 结论：**真正的枚举取值冲突只有 `mode` 一处（#1）**，连带 #2/#3/#4 同源修正；#5–#9 是**有意分层、非缺陷**（已文档化）；#10–#14 **一致**；#15 是**旧案遗留**（勿引用）。全部修改**仅落 `tech-design-final.md`**，`api-contract.md` **零改动**（其示例本就大写，是事实源）。
+
+#### 6.7.1 全文「依赖具体运行时/版本行为」断言的自查（可复现性）
+> 触发：这是设计文档里**第 4 次**出现「不可复现的技术断言」（前三次：F1 联系方式无写入路径、F3 `prisma validate` 声称通过、F5 时间预算算术；本次为 `Decimal` 措辞）。故对全文做一轮扫描 —— **凡"你凭什么这么说"，必须给得出可复现的验证路径**。
+
+| # | 断言 | 位置 | 可复现? | 验证方法 | 不可复现则怎么改 |
+|---|---|---|---|---|---|
+| P1 | `schema.prisma` 经官方引擎 `validate` 通过、`get_dmmf` 解析出 10/6/89 | §0 头 | **部分**：计数**可离线复现**（纯文本解析=10/6/89 ✓）；引擎校验**本沙箱不可复现**（Rust 引擎 `SIGKILL`） | 计数：解析 `schema.prisma`；引擎：可用环境 `pnpm prisma validate` + `get-dmmf` | 已加 §0 复现性标注，区分「可离线计数」与「需引擎」 |
+| P2 | PG 生成列无法引用 `now()`（非 immutable） | §4.3① | ✅ 可复现（需 PG16） | `CREATE TABLE t(d date GENERATED ALWAYS AS (now()::date) STORED)` → 期望 `42P17` | —（已用"读时计算"规避，无风险） |
+| P3 | Prisma `$queryRaw` 映射 `numeric→Decimal`、`float8/int4→number` | §6.5.4 | **未在本沙箱复现**（无 Prisma 引擎）；**底层 PG 类型已实测** | 联调断言 `min instanceof Prisma.Decimal`、`typeof median==='number'` | 已在 §6.5.4 标注「Prisma 侧映射未直连复跑」并给验证路径；T11 补断言 |
+| P4 | 「DB 一律存 UTC」 | §4.3② | ✅ 可复现（需联调） | `SELECT pg_typeof("publishedAt")` 期望 `timestamp(3)` 无时区；写 `new Date('…+08:00')` 读回为 UTC | 已在 §4.3② 加前提标注；若实测为 `timestamptz` 则改述为「按 tz 语义存」 |
+| P5 | `@updatedAt` 列「任何字段改动都会推进」 | §6.5.3 | ✅ 可复现 | Prisma Client `update` 后读回 `updatedAt` 已变；**raw `$executeRaw UPDATE` 不推进** | ⚠️ 已在 §6.5.3 加约束：`Item` 写路径必须全走 Prisma Client（否则指纹漏检） |
+| P6 | `SELECT … FOR UPDATE` 行锁 ⇒ 并发不双接受 | §4.1 / R4 | ✅ 可复现（需 PG+并发） | 并发集成/E2E：两事务同时 `accept` 同一 item → 恰一成功 | —（工程师已有并发用例） |
+| P7 | CHECK 约束（价格 ≥0 / FIXED_PRICE 必填价）经迁移生效 | §4.4 | ✅ 可复现（需 PG） | 插越界行 → 期望 `23514`；`tests/integration/check-constraints.test.ts` | — |
+| P8 | `@db.VarChar(n)` 强制长度 | §4.4 | ✅ 可复现（需 PG） | 插超长 → 期望 `22001` | — |
+| P9 | `AbortController` 超时=硬闸能中断模型往返 | §6.6.3 | ✅ 可复现（需 mock 慢端点） | mock sleep>timeout → fetch 抛 `AbortError`，实测墙钟≈timeout | 已限定为「**墙钟上界**」；abort 只终止等待、不保证服务端停止计费（非本方案承诺） |
+| P10 | `cuid()` 默认值由 Prisma 生成（非 PG 默认） | §4.2（schema） | ✅ 可复现（需 PG） | `\d "Item"` 的 `id` 无 DB default；raw INSERT 不给 id 会失败 | 现状全部写入走 Prisma Client；raw INSERT 需自带 `id` |
+| P11 | Next.js 15 以 Route Handlers 作 REST、`next dev` 可起 | §2.1 / §9 T01 | ✅ 可复现（冒烟） | `pnpm next dev` → `GET /api/health` 200 | — |
+| P12 | `percentile_cont` 返回 `double precision`（非 `Decimal`） | §6.5.4 | ✅ **已实测复现（PG16.14）** | `pg_typeof(percentile_cont(…))`；`tests/integration/pricing-query.test.ts` | 已闭环（§6.5.4 按驱动区分表） |
+
+> 说明：P2/P6/P7/P8/P10/P11 属**「可复现的确认型」**——结论正确且有明确验证路径；P3/P4/P9 加了**前提/限定**（不夸大）；P1 区分了环境限制；P5 是**新的设计约束**（写路径纪律）；P12 已闭环。**未发现新增的"不可复现且结论可能错"项。**
 
 ---
 

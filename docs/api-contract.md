@@ -104,6 +104,20 @@
 }
 ```
 
+**`freshness` 三档定义（G1：契约须自洽，与设计 `tech-design-final.md` §4.3①/§4.3② **逐字一致**）**：
+
+| `code` | 条件（`ageHours`，**半开区间**） | `label` |
+|---|---|---|
+| `JUST_LISTED` | `[0, 24)` | `刚上架` |
+| `NEW` | `[24, 72)` | `新上架` |
+| `OLDER` | `[72, ∞)` | `已上架 N 天`（`N = Math.floor(ageHours / 24)`） |
+
+- **边界（半开）**：**24h 整点 → `NEW`，72h 整点 → `OLDER`**；需求原文「24 小时内」按此代码口径理解。单测钉死 `23.99→JUST_LISTED / 24.00→NEW / 71.99→NEW / 72.00→OLDER`。
+- `ageHours`：**非负 `number`（float），服务端不做舍入**（G2）——取整属展示层；且舍入会破坏边界语义（如 `23.96h` 取整成 `24.0` 会让"值 24 却标 `JUST_LISTED`"显得自相矛盾）。未来 `publishedAt` 由服务端 clamp 到 `0`。
+- **同源**：`ageHours` 与 `code`/`label` 由服务端在**同一次 SQL** 中以 **DB `now()`** 计算（设计 §4.3①/§4.3② 时钟源清单），**不在两处各算**；**列表 `GET /api/items` 与详情 `GET /api/items/:id` 必须一致**。
+- **过滤**：`GET /api/items` 的 `freshness?` 取上述 `code` 值；过滤谓词与返回的 `ageHours` 用**同一表达式**，故不会出现"筛进来却标成另一档"。
+- **时区**：`freshness` 是**纯时长、与 tz 无关**；`Asia/Shanghai` **只**用于 §7 看板自然月聚合。
+
 **`ItemDetailDto`** = `ItemDto` + 以下字段：
 ```json
 {
