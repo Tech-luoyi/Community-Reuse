@@ -10,8 +10,11 @@ import {
   AiKindSchema,
   AiMetaSchema,
   AiSourceSchema,
+  ClaimDtoSchema,
+  ClaimListQuerySchema,
   ClaimStatusSchema,
   CommunitySummarySchema,
+  CreateClaimRequestSchema,
   CreateItemRequestSchema,
   ErrorBodySchema,
   ErrorCodeSchema,
@@ -84,6 +87,11 @@ export type ItemSort = z.infer<typeof ItemSortSchema>;
 export type ItemListQuery = z.infer<typeof ItemListQuerySchema>;
 export type CreateItemRequest = z.infer<typeof CreateItemRequestSchema>;
 export type UpdateItemRequest = z.infer<typeof UpdateItemRequestSchema>;
+
+/* ---- 领取申请 ---- */
+export type ClaimDto = z.infer<typeof ClaimDtoSchema>;
+export type CreateClaimRequest = z.infer<typeof CreateClaimRequestSchema>;
+export type ClaimListQuery = z.infer<typeof ClaimListQuerySchema>;
 
 /* ---- LLM ---- */
 export type AiSource = z.infer<typeof AiSourceSchema>;

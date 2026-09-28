@@ -283,6 +283,43 @@ export const UpdateItemRequestSchema = z.object({
 export type UpdateItemRequest = z.infer<typeof UpdateItemRequestSchema>;
 
 /* ===========================================================================
+ * 4b. 领取申请（api-contract.md §4）
+ * =========================================================================== */
+
+export const CLAIM_MESSAGE_MAX = 500;
+export const CLAIM_LOCATION_MAX = 120;
+
+/** 领取申请 DTO（§4）。`contactText` 的可见性由服务层按 `claimContactTextForViewer` 决定（D1）。 */
+export const ClaimDtoSchema = z.object({
+  id: z.string().min(1),
+  itemId: z.string().min(1),
+  applicant: UserSummarySchema,
+  message: z.string().max(CLAIM_MESSAGE_MAX).nullable(),
+  preferredAt: z.string().datetime().nullable(),
+  preferredLocation: z.string().max(CLAIM_LOCATION_MAX).nullable(),
+  status: ClaimStatusSchema,
+  contactText: z.string().max(CONTACT_TEXT_MAX).nullable(),
+  createdAt: z.string().datetime(),
+  acceptedAt: z.string().datetime().nullable(),
+  completedAt: z.string().datetime().nullable(),
+});
+export type ClaimDto = z.infer<typeof ClaimDtoSchema>;
+
+/** `POST /api/items/:id/claims` 请求体（§4）。 */
+export const CreateClaimRequestSchema = z.object({
+  message: z.string().trim().max(CLAIM_MESSAGE_MAX).optional(),
+  preferredAt: z.string().datetime().optional(),
+  preferredLocation: z.string().trim().max(CLAIM_LOCATION_MAX).optional(),
+});
+export type CreateClaimRequest = z.infer<typeof CreateClaimRequestSchema>;
+
+/** `GET /api/me/claims` query（§4）：我发起的（applied）/ 我收到的（received），缺省 applied。 */
+export const ClaimListQuerySchema = z.object({
+  as: z.enum(['applied', 'received']).default('applied'),
+});
+export type ClaimListQuery = z.infer<typeof ClaimListQuerySchema>;
+
+/* ===========================================================================
  * 5. LLM 能力（api-contract.md §8）
  * =========================================================================== */
 

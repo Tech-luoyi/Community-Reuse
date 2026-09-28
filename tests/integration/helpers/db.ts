@@ -289,6 +289,38 @@ export async function insertFavorite(
   );
 }
 
+export interface InsertClaimSpec {
+  /** id 后缀（最终 id = `${FIXTURE_PREFIX}${scope}-${key}`，随 cleanupFixtures 一起清理）。 */
+  key: string;
+  itemId: string;
+  applicantId: string;
+  message?: string | null;
+  /** ISO 字符串或 null（写 `preferredAt`）。 */
+  preferredAt?: string | null;
+  preferredLocation?: string | null;
+  status?: string;
+}
+
+/** 插入一条领取申请（id 随夹具前缀，可被 `cleanupFixtures` 清理）。 */
+export async function insertClaim(scope: string, spec: InsertClaimSpec): Promise<string> {
+  const id = `${FIXTURE_PREFIX}${scope}-${spec.key}`;
+  await pool.query(
+    `INSERT INTO "ClaimRequest"
+       ("id","itemId","applicantId","message","preferredAt","preferredLocation","status","createdAt","updatedAt")
+     VALUES ($1, $2, $3, $4, $5, $6, $7::"ClaimStatus", now(), now())`,
+    [
+      id,
+      spec.itemId,
+      spec.applicantId,
+      spec.message ?? null,
+      spec.preferredAt ?? null,
+      spec.preferredLocation ?? null,
+      spec.status ?? 'PENDING',
+    ],
+  );
+  return id;
+}
+
 /** PG 原生错误的可断言子集。 */
 export interface PgErrorShape {
   code: string;

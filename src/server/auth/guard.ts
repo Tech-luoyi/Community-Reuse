@@ -13,7 +13,7 @@
  *
  * 越权一律 403（FORBIDDEN）；未登录一律 401（UNAUTHENTICATED）；跨社区访问资源按 404 处理（不泄漏存在性）。
  */
-import type { ItemStatus, Prisma, TradeType } from '@prisma/client';
+import type { ClaimStatus, ItemStatus, Prisma, TradeType } from '@prisma/client';
 
 import { prisma } from '@/server/db';
 import { errors } from '@/server/errors';
@@ -79,24 +79,29 @@ export function assertCurrentCommunity(viewer: Viewer, communityId: string): voi
   }
 }
 
-/** 经守卫加载的当前社区内的物品（含改价不变式所需的 tradeType / price）。 */
+/** 经守卫加载的当前社区内的物品（含改价不变式所需的 tradeType / price；name 供通知文案）。 */
 export interface GuardedItem {
   id: string;
   ownerId: string;
   communityId: string;
+  name: string;
   status: ItemStatus;
   tradeType: TradeType;
   price: Prisma.Decimal | null;
 }
 
 /** 当前社区内的物品（不存在或跨社区均按 404，不泄漏跨租户存在性）。 */
-async function loadItemInCurrentCommunity(viewer: Viewer, itemId: string): Promise<GuardedItem> {
+export async function loadItemInCurrentCommunity(
+  viewer: Viewer,
+  itemId: string,
+): Promise<GuardedItem> {
   const item = await prisma.item.findUnique({
     where: { id: itemId },
     select: {
       id: true,
       ownerId: true,
       communityId: true,
+      name: true,
       status: true,
       tradeType: true,
       price: true,
@@ -142,4 +147,91 @@ export async function requireAcceptedApplicant(
     throw errors.forbidden('只有被接受的申请人可以执行该操作');
   }
   return claim;
+}
+
+/* ===========================================================================
+ * 领取申请（ClaimRequest）守卫 —— 契约 api-contract.md §4
+ * =========================================================================== */
+
+/** 经守卫加载的当前社区内的领取申请（含构建 `ClaimDto` 所需的双方资料）。 */
+export interface GuardedClaim {
+  id: string;
+  itemId: string;
+  applicantId: string;
+  message: string | null;
+  preferredAt: Date | null;
+  preferredLocation: string | null;
+  status: ClaimStatus;
+  createdAt: Date;
+  acceptedAt: Date | null;
+  completedAt: Date | null;
+  applicant: { id: string; nickname: string; contactText: string | null };
+  item: {
+    id: string;
+    ownerId: string;
+    communityId: string;
+    name: string;
+    status: ItemStatus;
+    owner: { id: string; contactText: string | null };
+  };
+}
+
+/**
+ * 加载当前社区内的领取申请（申请不存在，或其物品不在会话社区 → 404，不泄漏跨租户存在性）。
+ * @throws AppError NOT_FOUND
+ */
+export async function loadClaimInCurrentCommunity(
+  viewer: Viewer,
+  claimId: string,
+): Promise<GuardedClaim> {
+  const claim = await prisma.claimRequest.findUnique({
+    where: { id: claimId },
+    select: {
+      id: true,
+      itemId: true,
+      applicantId: true,
+      message: true,
+      preferredAt: true,
+      preferredLocation: true,
+      status: true,
+      createdAt: true,
+      acceptedAt: true,
+      completedAt: true,
+      applicant: { select: { id: true, nickname: true, contactText: true } },
+      item: {
+        select: {
+          id: true,
+          ownerId: true,
+          communityId: true,
+          name: true,
+          status: true,
+          owner: { select: { id: true, contactText: true } },
+        },
+      },
+    },
+  });
+  if (!claim || claim.item.communityId !== viewer.currentCommunityId) {
+    throw errors.notFound('领取申请不存在');
+  }
+  return claim;
+}
+
+/**
+ * 要求访问者是该申请**所属物品的发布者**。
+ * @throws AppError FORBIDDEN
+ */
+export function requireItemOwnerViaClaim(viewer: Viewer, claim: GuardedClaim): void {
+  if (viewer.id !== claim.item.ownerId) {
+    throw errors.forbidden('只有物品发布者可以执行该操作');
+  }
+}
+
+/**
+ * 要求访问者是该申请的**申请人本人**。
+ * @throws AppError FORBIDDEN
+ */
+export function requireApplicantViaClaim(viewer: Viewer, claim: GuardedClaim): void {
+  if (viewer.id !== claim.applicantId) {
+    throw errors.forbidden('只有申请人可以执行该操作');
+  }
 }
