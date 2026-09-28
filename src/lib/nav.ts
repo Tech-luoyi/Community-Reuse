@@ -36,7 +36,7 @@ export const NAV_SECTIONS: NavSection[] = [
     eyebrow: '浏览',
     items: [
       { href: '/', label: '物品集市', icon: LayoutGrid, stage: 'live' },
-      { href: '/requests', label: '我的申请', icon: ArrowLeftRight, stage: 5 },
+      { href: '/requests', label: '我的申请', icon: ArrowLeftRight, stage: 'live' },
     ],
   },
   {

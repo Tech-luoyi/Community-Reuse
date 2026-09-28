@@ -9,11 +9,23 @@
  */
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useRouter } from 'next/navigation';
+import { useCallback } from 'react';
 import { z } from 'zod';
 
 import { api } from '@/lib/api';
 import { qk } from '@/lib/queries';
-import { CommunitySummarySchema, JoinResponseDataSchema, type JoinRequest } from '@/shared/schemas';
+import {
+  ClaimDtoSchema,
+  CommunitySummarySchema,
+  ItemDtoSchema,
+  JoinResponseDataSchema,
+  UserSelfSchema,
+  type CreateClaimRequest,
+  type CreateItemRequest,
+  type JoinRequest,
+  type MeResponseData,
+  type PatchMeRequest,
+} from '@/shared/schemas';
 
 const OkSchema = z.object({ ok: z.boolean() });
 const SwitchResponseSchema = z.object({ community: CommunitySummarySchema });
@@ -55,5 +67,80 @@ export function useLogout() {
       queryClient.clear();
       router.replace('/join');
     },
+  });
+}
+
+/**
+ * 改动物品或申请之后要作废的范围。
+ *
+ * 物品可能落在任意筛选页的列表里，申请同时牵动详情、两侧列表与对手方的收件箱，
+ * 所以按前缀批量作废而不是精确 key —— 少失效一处就是拿旧状态继续渲染。
+ */
+function useInvalidateItemGraph() {
+  const queryClient = useQueryClient();
+
+  return useCallback(
+    (itemId?: string) => {
+      queryClient.invalidateQueries({ queryKey: qk.itemListPrefix() });
+      queryClient.invalidateQueries({ queryKey: qk.itemDetailPrefix() });
+      queryClient.invalidateQueries({ queryKey: qk.myClaimsPrefix() });
+      if (itemId) queryClient.invalidateQueries({ queryKey: qk.itemClaims(itemId) });
+    },
+    [queryClient],
+  );
+}
+
+export function useCreateItem() {
+  const invalidate = useInvalidateItemGraph();
+
+  return useMutation({
+    mutationFn: (body: CreateItemRequest) => api.post('/api/items', ItemDtoSchema, body),
+    onSuccess: (item) => invalidate(item.id),
+  });
+}
+
+export function useCreateClaim(itemId: string) {
+  const invalidate = useInvalidateItemGraph();
+
+  return useMutation({
+    mutationFn: (body: CreateClaimRequest) =>
+      api.post(`/api/items/${itemId}/claims`, ClaimDtoSchema, body),
+    onSuccess: () => invalidate(itemId),
+  });
+}
+
+/** 契约 §4 状态机的四条转移边，路径都是 `/api/claims/:id/<action>`。 */
+export type ClaimAction = 'accept' | 'reject' | 'complete' | 'cancel';
+
+/** 状态机的四条转移边共用一个 hook：路径是 `/api/claims/:id/<action>`，返回转移后的 DTO。 */
+export function useClaimAction(action: ClaimAction) {
+  const invalidate = useInvalidateItemGraph();
+
+  return useMutation({
+    mutationFn: (claim: { id: string; itemId: string }) =>
+      api.post(`/api/claims/${claim.id}/${action}`, ClaimDtoSchema),
+    onSuccess: (_result, claim) => invalidate(claim.itemId),
+  });
+}
+
+export function useArchiveItem() {
+  const invalidate = useInvalidateItemGraph();
+
+  return useMutation({
+    mutationFn: (itemId: string) => api.post(`/api/items/${itemId}/archive`, ItemDtoSchema),
+    onSuccess: (item) => invalidate(item.id),
+  });
+}
+
+export function usePatchMe() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (body: PatchMeRequest) =>
+      api.patch('/api/me', z.object({ user: UserSelfSchema }), body),
+    onSuccess: (result) =>
+      queryClient.setQueryData<MeResponseData>(qk.me(), (previous) =>
+        previous ? { ...previous, user: result.user } : previous,
+      ),
   });
 }
