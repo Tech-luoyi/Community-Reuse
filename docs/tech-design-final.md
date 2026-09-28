@@ -386,19 +386,28 @@ function getFreshness(publishedAt: Date, now = new Date()) {
 物品名称：{name}
 补充描述：{description}
 品类：{category}
-按此 JSON schema 输出：
-{ "mode": "free" | "priced",
+按此 JSON schema 输出（枚举取值一律**全大写**）：
+{ "mode": "FREE" | "PRICED",
   "priceRange": { "min": number, "max": number, "currency": "CNY" } | null,
   "reason": "string ≤30字" }
 ```
-- 期望 schema：
+- 期望 schema（**宽容入、严格出**，见下方说明）：
 ```ts
 z.object({
-  mode: z.enum(['free', 'priced']),
+  // 先归一化大小写再校验枚举：模型返回 'free'/'Priced' 等经归一化后仍走同一严格枚举
+  mode: z.string().trim().toUpperCase().pipe(z.enum(['FREE', 'PRICED'])),
   priceRange: z.object({ min: z.number().nonnegative(), max: z.number().nonnegative(), currency: z.literal('CNY') }).nullable(),
   reason: z.string().max(60),
 })
 ```
+
+> **枚举大小写：统一 `FREE | PRICED`。** 与 `TradeType`(FREE/PAY_WHATEVER/FIXED_PRICE/OTHER) / `ItemStatus` / `ClaimStatus` / `NotificationType` / `MessageSenderType` / `AiKind` 的**全大写风格一致**——`mode` 此前是唯一的小写异类；且 `api-contract.md` §8 的响应示例本就为大写（契约是对外事实源，改它会破坏已定义响应形状），**故对齐设计侧、零契约改动**。（历史 24h 文档 `tech-design.md`/`er-diagram.mermaid`/`peer-design-week1.md` 的小写 `free|flexible|priced` 属**已废弃旧案**，不在本定稿范围，见 §6.7 扫描表。）
+>
+> **宽容入、严格出 —— 该 transform 是有意为之，且不是"静默失败"：**
+> - **风险是真实的**：模型对枚举值大小写**不稳定**（可能返回 `free`、`Free`、`FREE`、带空白），这是常见现象而非假想。若直接 `z.enum(['FREE','PRICED'])`，一个大小写笔误就会被判 **JSON/schema 非法 → 触发 `REPAIR` → 甚至 `FALLBACK`**，白白降级。
+> - **归一化只吸收「大小写/空白」这一个已定义等价类，不放松值域**：归一化后**仍须命中** `FREE|PRICED`；其它任何值（如 `paid`、`freebie`）**依旧判非法**并按状态机走 `REPAIR`→`FALLBACK`。
+> - **为何不算"静默失败"**：① 有**明确文档**（本节）；② 有**确定性语义**（大小写/空白不敏感匹配，等价类边界清晰）；③ 有**单测**（`free`/`Free`/`FREE ` 必过，`paid` 必挂）。它是**被声明的规范化管线**，而非把错误悄悄吞掉——"静默失败"指无文档、语义含糊、把非法值当合法放行，三者本设计皆无。
+> - **为何不在服务层写 `toUpperCase()`**：会把归一化散落到多处、成为隐藏失败点；放进 Zod 的 `pipe` 让「归一化 + 严格校验」在同一声明处完成，可被单测直接覆盖。
 
 **B. 物品描述优化** `POST /api/ai/polish`
 - System：`你是社区闲置转让文案写手。把粗糙描述润色成真诚、简洁、有吸引力的转让文案；口语化、突出成色与可用性、不夸大、不刷屏、适合熟人社区。只输出 JSON。`
@@ -429,15 +438,17 @@ z.object({
 - 期望 schema：`z.object({ answer: z.string().max(120), confidence: z.number().min(0).max(1) })`
 - 一键发送：前端将 `answer` 提交到 `POST /api/items/:id/messages`，服务端写 `senderType:"AI"`。
 
+> **关于 prompt 里的字数与 schema 边界（A/B/C 三档统一说明，避免误"修复"）**：prompt 中的 `≤30字 / ≤15字 / 80-150字 / ≤60字 / 3 条` 是给模型的**目标区间（guidance）**；schema 里的 `max(60)/max(30)/min(20).max(300)/max(120)/max(5)` 是**验收容忍边界（tolerance）**。两者关系恒为 **prompt 目标 ⊆ schema 边界**（逐档核对：reason 30⊆60、title 15⊆30、description 80–150⊆20–300、answer 60⊆120、highlights 3⊆5），这是**有意分层**：prompt 收紧以引导质量，schema 放宽以吸收模型合理波动、降低误 `REPAIR`。**请勿把 schema 收紧到 prompt 的目标值**（会抬高误判率）；`api-contract.md` 未规定这些长度，故此处**无需契约改动**。
+
 ### 6.3 无 Key / 超时降级（`src/server/ai/fallback.ts`）
 
 > 原则：降级必须**确定性、零依赖、即时**，保证断网/欠费时三个按钮依然"有反馈、不黑屏"。
 
 | 能力 | 触发 | 规则兜底 | source |
 |---|---|---|---|
-| 定价 | 无 Key / 超时 / JSON 非法 | 关键词表：含「婴儿车/书/绿植/衣服」→ `free`；否则 `priced`，区间 = 命中品牌词 ? `[50,150]` : `[20,80]` | `rule` |
+| 定价 | 无 Key / 超时 / JSON 非法 | 关键词表：含「婴儿车/书/绿植/衣服」→ `mode='FREE'`；否则 `mode='PRICED'`，区间 = 命中品牌词 ? `[50,150]` : `[20,80]` | `rule` |
 | 润色 | 同上 | 模板：`title = name + '（' + 成色词 + '）'`；`description = 原文 + '实物如图，随时可自提，先到先得～'`；`highlights` 取描述前 3 短句 | `rule` |
-| FAQ | 同上 | 关键词：`还在吗`→「在的，随时可约自提～」；`自提`→「支持自提，就在{社区}，时间你定」；`刀/便宜`→ free/flexible「已经是送/随便给啦，不还价～」/priced「价格已很低，诚心要可小刀」；未命中→通用回复 | `rule` |
+| FAQ | 同上 | 关键词：`还在吗`→「在的，随时可约自提～」；`自提`→「支持自提，就在{社区}，时间你定」；`刀/便宜`→ 交易方式 `FREE`/`PAY_WHATEVER` 时「已经是送/随便给啦，不还价～」，`FIXED_PRICE` 时「价格已很低，诚心要可小刀」；未命中→通用回复 | `rule` |
 
 前端配合：`degraded:true` 时展示低调「离线建议」灰标 + tooltip。**降级路径需提前自测，是 Demo 保险也是加分点**。
 
@@ -681,6 +692,29 @@ stateDiagram-v2
 2. **DeepSeek 是否稳定返回 `tool_calls`**：**未实测**。若不稳定 → 走 §6.5.8 预取保险模式（`toolMode='prefetch'`，仍演示「读了库」），**不阻塞交付**。验证：T11 联调抓一次原始响应体。
 3. **`updatedAt` 抖动敏感性**：任何字段改动都会推进 `updatedAt`，使该社区全部定价缓存失效、命中率可能低于预期。**不影响正确性**（只降命中率）。若演示发现过低，可收窄指纹为「仅 `price`/`archivedAt` 的 max」——优化项，非正确性项。
 4. **`TOTAL_DEADLINE_MS=20000` 的用户感知**：典型 3–7s，20s 仅尾部硬闸；若产品坚持 15s 上限，按 §6.6.3 退路把每轮降到 4.5s。
+
+#### 6.7 设计文档 ↔ 契约 一致性扫描（本轮附：统一枚举大小写）
+> 触发：工程师实现 `src/shared/schemas.ts` 时撞到「§6.2 A 期望 schema 小写 vs §8 响应示例大写」。此处**全量扫描**同类不一致（枚举取值 / 字段名 / 大小写 / 必填性 / 序列化形状 / 边界）。
+
+| # | 位置 | 设计文档侧 | 契约侧 | 裁决 | 改哪侧 | 理由 |
+|---|---|---|---|---|---|---|
+| 1 | 定价 `mode` 取值大小写 | §6.2 A prompt+schema：`free\|priced` | §8 示例：`FREE\|PRICED` | **统一大写 `FREE\|PRICED`** | **设计侧** | 全库枚举皆全大写；契约是对外事实源，改它破坏响应形状 |
+| 2 | 定价 `mode` 归一化 | §6.2 A：无归一化（直接 enum） | 无（示例已大写） | **加 `trim().toUpperCase().pipe(enum)`** | **设计侧** | 模型大小写不稳，避免误 `REPAIR`（宽容入严格出，§6.2 A 说明） |
+| 3 | 规则兜底 `mode` | §6.3 表：`free`/`priced` | §8 降级示例：`FREE` | **统一大写** | **设计侧** | 规则输出与 LLM 输出必须**同形**，否则前端按 mode 分支会分裂 |
+| 4 | FAQ 规则里的交易方式词 | §6.3 表：`free/flexible`/`priced` | §2：`TradeType` = `FREE/PAY_WHATEVER/FIXED_PRICE/OTHER` | **改用 `FREE`/`PAY_WHATEVER`/`FIXED_PRICE`** | **设计侧** | `flexible` 非定稿枚举值（24h 旧案命名），易误导实现 |
+| 5 | 润色 `title` 边界 | §6.2 B：prompt `≤15字` / schema `max(30)` | 契约**无**边界规定 | 保持（**prompt 目标 ⊆ schema 容忍**） | 无（仅加分层说明） | 有意分层：prompt 引导质量、schema 吸收波动、降低误判 |
+| 6 | 润色 `description` 边界 | §6.2 B：prompt `80-150字` / schema `min20.max300` | 契约**无** | 保持（同上） | 无 | 同上 |
+| 7 | 润色 `highlights` 条数 | §6.2 B：prompt `3 条` / schema `max(5)` | 契约**无** | 保持（同上） | 无 | 同上 |
+| 8 | 定价 `reason` 边界 | §6.2 A：prompt `≤30字` / schema `max(60)` | 契约**无** | 保持（同上） | 无 | 同上 |
+| 9 | FAQ `answer` 边界 | §6.2 C：prompt `≤60字` / schema `max(120)` | 契约**无** | 保持（同上） | 无 | 同上 |
+| 10 | 工具返回字段 | §6.5.4/§6.5.5：`{count,min,max,median,p25,p75,samples:[{name,price,tradeType,archivedAt}]}`，`≤8` | §8.1：`{count,min,max,median,p25,p75,samples≤8}` | **一致** | 无 | 逐字段核对通过 |
+| 11 | `usedTools`/`toolCalls` 语义 | §6.5.8/§6.6.4 | §8.1 | **一致** | 无 | 均定义为「**实际执行的 DB 查询次数**」，prefetch 计 1 |
+| 12 | `source` 取值 | §6.1/§6.6.4：`llm\|rule\|cache` | §8/§8.1：同 | **一致** | 无 | 逐值核对通过 |
+| 13 | 工具 `tradeType` 枚举 | §6.5.5：`FREE/PAY_WHATEVER/FIXED_PRICE/OTHER` | §2：同 | **一致** | 无 | 复用既有 `TradeType` |
+| 14 | `freshness` code | §7.4：`JUST_LISTED/NEW/OLDER` | §2：同 | **一致** | 无 | 逐值核对通过 |
+| 15 | **历史 24h 文档** | `tech-design.md` / `er-diagram.mermaid` / `peer-design-week1.md`：小写 `free\|flexible\|priced`、`trade_mode`、`status=available` | 非定稿 | **不改，标注为已废弃旧案** | 无 | 非事实源；三处定稿一致性只认 `tech-design-final.md` / `schema.prisma` / `api-contract.md` / `er-diagram-final.mermaid` |
+
+> 结论：**真正的枚举取值冲突只有 `mode` 一处（#1）**，连带 #2/#3/#4 同源修正；#5–#9 是**有意分层、非缺陷**（已文档化）；#10–#14 **一致**；#15 是**旧案遗留**（勿引用）。全部修改**仅落 `tech-design-final.md`**，`api-contract.md` **零改动**（其示例本就大写，是事实源）。
 
 ---
 
