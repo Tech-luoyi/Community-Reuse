@@ -29,3 +29,6 @@ public/uploads/*
 *.log
 npm-debug.log*
 yarn-error.log*
+
+# 本地浏览器实测产物（截图 + CDP 截图脚本），不进提交
+.review/

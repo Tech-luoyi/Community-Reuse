@@ -22,6 +22,7 @@ const eslintConfig = [
       'coverage/**',
       'dist/**',
       'public/uploads/**',
+      '.review/**',
       'next-env.d.ts',
     ],
   },
