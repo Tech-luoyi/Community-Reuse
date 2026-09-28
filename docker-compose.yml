@@ -8,6 +8,11 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: community
+      # 固化会话时区为 UTC（见 tech-design-final.md §4.3② 时钟源清单 / P13）。
+      # 原因：含 `DEFAULT CURRENT_TIMESTAMP` 的列走 **会话时区**；而 Prisma Client 恒按 UTC 语义写入。
+      # 二者只有在「DB 会话时区 = UTC」时才落在同一时间轴上，否则 raw 路径写入的行会
+      # 与 Prisma 写入的行相差一个时区偏移，导致 `ageHours = (now() - publishedAt)` 静默出错。
+      TZ: UTC
     # 宿主端口可通过 DB_PORT 覆盖（默认 5432）。
     # 有些开发机 5432 已被其它项目占用，此时在本地 .env 里设 DB_PORT=55433 即可，
     # 无需改动本文件（canonical 默认仍是 PG 标准端口 5432）。
