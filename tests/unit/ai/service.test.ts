@@ -30,7 +30,8 @@ vi.mock('@/server/ai/cache', () => ({
   computeCacheKey: mocks.computeCacheKey,
 }));
 vi.mock('@/server/auth/guard', () => ({
-  loadItemInCurrentCommunity: mocks.loadItem,
+  // FAQ 走 `requireOwner`（契约 §8 权限例外：仅发布者可取回复建议）；服务层不再用其它守卫。
+  requireOwner: mocks.loadItem,
 }));
 vi.mock('@/server/db', () => ({
   prisma: {
