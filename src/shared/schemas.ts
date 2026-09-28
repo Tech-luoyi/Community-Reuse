@@ -283,6 +283,132 @@ export const UpdateItemRequestSchema = z.object({
 export type UpdateItemRequest = z.infer<typeof UpdateItemRequestSchema>;
 
 /* ===========================================================================
+ * 3a. 图片上传（api-contract.md §3）
+ * =========================================================================== */
+
+/** 单张上限 5 MiB（契约 §3「≤5MB」按二进制 MiB 解释，前后端同口径）。 */
+export const MAX_UPLOAD_BYTES = 5 * 1024 * 1024;
+
+/** MIME 白名单 → 落盘扩展名（服务端自行映射，不采信客户端文件名）。 */
+export const ALLOWED_UPLOAD_MIME: Record<string, string> = {
+  'image/jpeg': 'jpg',
+  'image/png': 'png',
+  'image/webp': 'webp',
+};
+
+/** `POST /api/uploads` 响应体（§3）。`url` 恒为 `/uploads/<key>`（本地适配器约定）。 */
+export const UploadResultSchema = z.object({
+  key: z.string().min(1),
+  url: z.string().min(1),
+});
+export type UploadResult = z.infer<typeof UploadResultSchema>;
+
+/* ===========================================================================
+ * 3b. 公开留言板（api-contract.md §5）
+ * =========================================================================== */
+
+export const MESSAGE_CONTENT_MAX = 1000;
+
+/**
+ * 留言 DTO（§5）。`author` **可为 `null`**：`senderType="AI"` 的行没有作者外键
+ * （`authorId:null`），前端须以「AI 建议」标签渲染，不得伪装为用户发言。
+ */
+export const MessageDtoSchema = z.object({
+  id: z.string().min(1),
+  itemId: z.string().min(1),
+  senderType: MessageSenderTypeSchema,
+  author: UserSummarySchema.nullable(),
+  content: z.string().max(MESSAGE_CONTENT_MAX),
+  createdAt: z.string().datetime(),
+});
+export type MessageDto = z.infer<typeof MessageDtoSchema>;
+
+/**
+ * `POST /api/items/:id/messages` 请求体（§5）。
+ * `senderType` 缺省 `USER`；`AI` **仅物品发布者**可用（服务端强制 `authorId=null`）。
+ */
+export const MessageRequestSchema = z.object({
+  content: z.string().trim().min(1).max(MESSAGE_CONTENT_MAX),
+  senderType: MessageSenderTypeSchema.default('USER'),
+});
+export type MessageRequest = z.infer<typeof MessageRequestSchema>;
+
+/* ===========================================================================
+ * 3c. 收藏 / 我的 / 通知（api-contract.md §6）
+ * =========================================================================== */
+
+/** `POST` / `DELETE /api/items/:id/favorite` 响应体（§6）。 */
+export const FavoriteResultSchema = z.object({ favorited: z.boolean() });
+export type FavoriteResult = z.infer<typeof FavoriteResultSchema>;
+
+/** `GET /api/me/items` query（§6）：`status` 缺省 = 三种状态全返回（含已归档）。 */
+export const MyItemsQuerySchema = z.object({
+  status: ItemStatusSchema.optional(),
+});
+export type MyItemsQuery = z.infer<typeof MyItemsQuerySchema>;
+
+/** 通知 DTO（§6）。`title`/`content` 上限对齐 `@db.VarChar(80)` / `@db.VarChar(500)`。 */
+export const NotificationDtoSchema = z.object({
+  id: z.string().min(1),
+  type: NotificationTypeSchema,
+  title: z.string().min(1).max(80),
+  content: z.string().max(500),
+  readAt: z.string().datetime().nullable(),
+  createdAt: z.string().datetime(),
+});
+export type NotificationDto = z.infer<typeof NotificationDtoSchema>;
+
+/** `GET /api/me/notifications` query（§6）：`unreadOnly` 缺省 `false`（全量）。 */
+export const NotificationListQuerySchema = z.object({
+  unreadOnly: BooleanQuerySchema.optional(),
+});
+export type NotificationListQuery = z.infer<typeof NotificationListQuerySchema>;
+
+/* ===========================================================================
+ * 3d. 数据看板（api-contract.md §7）
+ * =========================================================================== */
+
+/** 看板聚合口径时区：DB 存 UTC，自然月按此区间的 `[start, end)` 比较。 */
+export const STATS_TIMEZONE = 'Asia/Shanghai';
+
+/** `monthRange` 边界（ISO 8601 **带偏移**字符串，必须与实际聚合用的边界逐字一致）。 */
+export const StatsMonthRangeSchema = z.object({
+  start: z.string().min(1),
+  end: z.string().min(1),
+});
+export type StatsMonthRange = z.infer<typeof StatsMonthRangeSchema>;
+
+/** 看板 DTO（§7）。`fastestItem` / `mostWantedItem` 无数据时为 `null`（前端渲染空态）。 */
+export const StatsDtoSchema = z.object({
+  monthPublished: z.number().int().nonnegative(),
+  monthCompleted: z.number().int().nonnegative(),
+  activeCount: z.number().int().nonnegative(),
+  fastestItem: z
+    .object({
+      id: z.string().min(1),
+      name: z.string().min(1),
+      durationMinutes: z.number().int().nonnegative(),
+    })
+    .nullable(),
+  mostWantedItem: z
+    .object({
+      id: z.string().min(1),
+      name: z.string().min(1),
+      wantCount: z.number().int().nonnegative(),
+    })
+    .nullable(),
+  timezone: z.literal(STATS_TIMEZONE),
+  monthRange: StatsMonthRangeSchema,
+});
+export type StatsDto = z.infer<typeof StatsDtoSchema>;
+
+/** `GET /api/stats/community` query（§7）：缺省取会话社区；显式传入必须一致（否则 403）。 */
+export const StatsQuerySchema = z.object({
+  communityId: z.string().min(1).optional(),
+});
+export type StatsQuery = z.infer<typeof StatsQuerySchema>;
+
+/* ===========================================================================
  * 4b. 领取申请（api-contract.md §4）
  * =========================================================================== */
 

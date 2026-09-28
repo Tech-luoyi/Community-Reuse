@@ -49,7 +49,7 @@ import {
   buildPolishUserPrompt,
   buildPricingUserPrompt,
 } from '@/server/ai/prompts';
-import { type Viewer, loadItemInCurrentCommunity } from '@/server/auth/guard';
+import { type Viewer, requireOwner } from '@/server/auth/guard';
 import { prisma } from '@/server/db';
 
 /** 本轮（未引入工具）的固定工具元信息；T11 会让定价档取真值。 */
@@ -191,7 +191,9 @@ export async function generatePolish(input: PolishRequest): Promise<PolishResult
  * 先按会话社区加载物品（不存在/跨社区 → 404，全站一致的租户红线）。
  */
 export async function generateFaq(viewer: Viewer, input: FaqRequest): Promise<FaqResult> {
-  const item = await loadItemInCurrentCommunity(viewer, input.itemId);
+  // FAQ 是「卖家回复建议」：仅发布者可用（契约 §8 权限例外）。非发布者 → 403，
+  // 物品不存在/跨社区 → 404（`requireOwner` 内部先做租户校验）。
+  const item = await requireOwner(viewer, input.itemId);
   // `GuardedItem` 不含 description；物品存在性与租户已由上面的守卫校验，这里只补取 prompt 所需的描述。
   const detail = await prisma.item.findUnique({
     where: { id: item.id },

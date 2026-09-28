@@ -2,7 +2,8 @@
  * `POST /api/ai/faq` —— 交易 FAQ 自动回复建议（docs/api-contract.md §8）。
  *
  * 请求：`{ itemId, question }` → `200 { data: FaqResult }`。
- * 权限：`MEMBER`。物品按**会话社区**加载（不存在/跨社区 → `NOT_FOUND` 404）。
+ * 权限：**`OWNER`**（§8 权限例外——FAQ 是「卖家回复建议」，且产物可经 §5 以 `senderType:"AI"` 发进留言板）。
+ * 物品按**会话社区**加载：不存在/跨社区 → `NOT_FOUND`(404)；存在但非发布者 → `FORBIDDEN`(403)。
  * 错误：`INVALID_INPUT`(400) / `NOT_FOUND`(404) / `RATE_LIMITED`(429)。LLM 不可用 → 规则降级（仍 200）。
  */
 import { FaqRequestSchema } from '@/shared/schemas';

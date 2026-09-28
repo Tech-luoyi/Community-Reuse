@@ -4,35 +4,23 @@
  * 事实源：docs/tech-design-final.md §6.1（限流行）、docs/api-contract.md §8（`RATE_LIMITED` 429）。
  * 参数：**每用户 10 次/分、全局 60 次/分**。
  *
- * ⚠️ 诚实标注：令牌桶状态**仅存进程内**（`Map`），**多实例部署下不共享**（每实例各 60/分）。
- * 本项目为**单进程 Demo**，够用；生产需换 Redis 等共享计数（超出本期范围）。
+ * 桶算法本体在 `@/server/rate-limit`（与 §3 上传共用同一实现，避免两份漂移）；
+ * 本文件只固定 AI 的容量参数并保留既有导出名（调用点与单测不变）。
  *
- * 计数口径：**请求进入即计数**（含缓存命中的请求），与是否真正调用模型无关——限流保护的是接口入口。
+ * ⚠️ 诚实标注：状态仅存进程内、多实例不共享——见 `@/server/rate-limit` 的同名说明。
+ * 计数口径：**请求进入即计数**（含缓存命中的请求），与是否真正调用模型无关。
  */
-import { errors } from '@/server/errors';
+import { createRateLimiter } from '@/server/rate-limit';
 
 const WINDOW_MS = 60_000;
 const PER_USER_CAPACITY = 10;
 const GLOBAL_CAPACITY = 60;
 
-interface Bucket {
-  tokens: number;
-  updatedAt: number;
-}
-
-const userBuckets = new Map<string, Bucket>();
-let globalBucket: Bucket = { tokens: GLOBAL_CAPACITY, updatedAt: Date.now() };
-
-/** 按速率补充令牌。 */
-function refill(bucket: Bucket, capacity: number, now: number): void {
-  const elapsed = now - bucket.updatedAt;
-  if (elapsed <= 0) {
-    return;
-  }
-  const refillAmount = (elapsed * capacity) / WINDOW_MS;
-  bucket.tokens = Math.min(capacity, bucket.tokens + refillAmount);
-  bucket.updatedAt = now;
-}
+const aiLimiter = createRateLimiter({
+  windowMs: WINDOW_MS,
+  userCapacity: PER_USER_CAPACITY,
+  globalCapacity: GLOBAL_CAPACITY,
+});
 
 /**
  * 尝试消费一个令牌（用户桶 + 全局桶须**同时**可用）。
@@ -40,19 +28,7 @@ function refill(bucket: Bucket, capacity: number, now: number): void {
  * @returns 是否放行。
  */
 export function tryConsumeAiRateLimit(userId: string, now: number = Date.now()): boolean {
-  const userBucket = userBuckets.get(userId) ?? { tokens: PER_USER_CAPACITY, updatedAt: now };
-  refill(userBucket, PER_USER_CAPACITY, now);
-  refill(globalBucket, GLOBAL_CAPACITY, now);
-
-  if (userBucket.tokens < 1 || globalBucket.tokens < 1) {
-    userBuckets.set(userId, userBucket);
-    return false;
-  }
-
-  userBucket.tokens -= 1;
-  globalBucket.tokens -= 1;
-  userBuckets.set(userId, userBucket);
-  return true;
+  return aiLimiter.tryConsume(userId, now);
 }
 
 /**
@@ -60,13 +36,10 @@ export function tryConsumeAiRateLimit(userId: string, now: number = Date.now()):
  * @throws AppError RATE_LIMITED
  */
 export function enforceAiRateLimit(userId: string): void {
-  if (!tryConsumeAiRateLimit(userId)) {
-    throw errors.rateLimited();
-  }
+  aiLimiter.enforce(userId);
 }
 
 /** 重置全部令牌桶（**测试专用**）。 */
 export function resetAiRateLimit(): void {
-  userBuckets.clear();
-  globalBucket = { tokens: GLOBAL_CAPACITY, updatedAt: Date.now() };
+  aiLimiter.reset();
 }
