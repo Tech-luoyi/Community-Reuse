@@ -36,12 +36,18 @@
 | 500 | `INTERNAL` | 服务器内部错误 |
 | 503 | `DEPENDENCY_UNAVAILABLE` | 依赖不可用（DB）。**LLM 不可用不报错**，走降级并置 `degraded:true` |
 
+> 注：上表是**错误码全集**（含通用码 `UNAUTHENTICATED` / `FORBIDDEN`）。各端点「错误」列**只列该端点特有 / 业务码**，**不重复** 401/403 —— 规则见 §0.3。
+
 ### 0.3 鉴权与多租户
 
 - 鉴权：`join` 成功后签发 **HttpOnly + Secure + SameSite=Lax** 会话 Cookie；此后所有请求从服务端会话解析当前用户。
 - 多租户：除 `join` / `health` 外，涉及社区数据的接口均需满足「当前用户是该 `communityId` 的 `CommunityMember`」。
+- **已接受限制（诚实标注）**：`GET` 与 `PATCH /api/me` **都**要求「当前用户是**会话所指社区**的成员」（`requireMember`）。响应里的 `memberships` 本可用于**自救切换**社区，但两个接口在**切换前**就要求成员身份 ⇒ 若「会话指向用户**已退出**的社区」，会出现**无法读取/修改自己资料**的死角。**该状态当前不可达**（无「退出社区」接口，`CommunityMember` 行仅由 `POST /api/auth/join` 创建），故记为**已接受限制**；**将来若新增「退出社区」功能，必须一并重新设计**——建议届时放宽为 **`GET /api/me` 不要求成员身份**，以便用户回到 `/me` 把自己切到仍在的社区。
 - 权限角色：`GUEST`（未登录）/ `MEMBER` / `OWNER`（物品发布者）/ `ACCEPTED_APPLICANT`（被接受的申请人）。
   > 定稿决策：**不设 `ADMIN` 角色**。「举报 + 管理员隐藏」已砍除，`MemberRole` 与 `CommunityMember.role` 随之移除——所有权限均由**关系**推导（你是不是成员、是不是发布者、是不是被接受的申请人），不依赖角色列。若后续要做成员管理，加回 role 是一次普通 migration。
+- **通用错误码规范（避免逐端点列错漏）**：凡**需要登录**的端点（= 除 `join`、`health` 两个 `GUEST` 端点以外的**全部**端点；**含 §8 由正文声明 `MEMBER` 的 `/api/ai/*`**）**均可**返回 `UNAUTHENTICATED`(401，无有效会话) 与 `FORBIDDEN`(403，会话有效但关系不满足)；`GUEST` 端点（`join`、`health`）**两者皆无**。
+  > ⇒ 因此各端点的**「错误」列只列该端点的特有 / 业务错误码**，**不再重复**这两个通用码。错误列中的 **`—`** 语义：**"无端点特有错误"**（**需登录**端点仍按上条可能返回 401/403）。**唯一例外**：`POST /api/auth/logout` 的 `—` 表示**"无任何错误"**（幂等、无守卫、恒 200）。
+  > ⇒ **风格声明（单一定稿）**：本文档**只采用**「错误列只留特有码」这一种风格，**不**混用"逐端点列全通用码"。新增端点一律照此办理。
 - **字段裁剪（D1 硬规则）**：`contactText` **永不**出现在物品详情响应中；仅当存在一条 `ACCEPTED`/`COMPLETED` 的 `ClaimRequest` 时，才向该笔交易的对手方返回对方 `contactText`。
 
 ---
@@ -51,10 +57,10 @@
 | Method | Path | 权限 | 请求 | 响应 | 错误 |
 |---|---|---|---|---|---|
 | POST | `/api/auth/join` | GUEST | `{ inviteCode: string, nickname: string }` | `201 { data: { user, community, memberships } }` + Set-Cookie | `INVALID_INPUT`, `NOT_FOUND`(邀请码错) |
-| POST | `/api/auth/switch` | MEMBER | `{ communityId }` | `200 { data: { community } }` | `FORBIDDEN` |
+| POST | `/api/auth/switch` | MEMBER | `{ communityId }` | `200 { data: { community } }` | — |
 | POST | `/api/auth/logout` | MEMBER | — | `200 { data: { ok: true } }` | — |
-| GET | `/api/me` | MEMBER | — | `200 { data: { user:{id,nickname,contactText}, memberships[], currentCommunity } }` | `UNAUTHENTICATED` |
-| PATCH | `/api/me` | MEMBER | `{ nickname?: string, contactText?: string }` | `200 { data: { user: {...} } }` | `INVALID_INPUT`, `UNAUTHENTICATED` |
+| GET | `/api/me` | MEMBER | — | `200 { data: { user:{id,nickname,contactText}, memberships[], currentCommunity } }` | — |
+| PATCH | `/api/me` | MEMBER | `{ nickname?: string, contactText?: string }` | `200 { data: { user: {...} } }` | `INVALID_INPUT` |
 
 > **`contactText` 写入路径（D1 闭环）**：唯一的写入入口是 `PATCH /api/me`。规则——`contactText` 长度 ≤120（对齐 `schema.prisma` 的 `@db.VarChar(120)`）；传**空串等价于清空为 `null`**；`nickname` 可与 `contactText` 一并更新（≤30）。写入**不改变**可见性规则：仅当存在该用户参与的 `ACCEPTED`/`COMPLETED` 申请时，才向交易对手方返回（见 §0.3、§4）。前端在 `/me`（个人资料页）暴露该字段，文案标注「被接受后才对交易对手方展示」；对方未填写时，对手方侧显示「对方未填写联系方式」（不留空白）。
 
@@ -78,11 +84,20 @@
 
 | Method | Path | 权限 | 请求 | 响应 | 错误 |
 |---|---|---|---|---|---|
-| GET | `/api/items` | MEMBER | query：`q?`, `category?`, `tradeType?`(FREE\|PAY_WHATEVER\|FIXED_PRICE\|OTHER), `status?`(默认 `ACTIVE`), `freshness?`(JUST_LISTED\|NEW\|OLDER), `favorite?`, `sort?`(默认 `latest`), `page=1`, `pageSize=20` | `200 { data: ItemDto[], pagination }` | `INVALID_INPUT`, `UNAUTHENTICATED` |
-| POST | `/api/items` | MEMBER | `{ communityId, name, category?, description, tradeType, price?, imageKeys?: string[] }` | `201 { data: ItemDto }` | `INVALID_INPUT`, `FORBIDDEN`, `PAYLOAD_TOO_LARGE` |
-| GET | `/api/items/:id` | MEMBER | — | `200 { data: ItemDetailDto }` | `NOT_FOUND`, `FORBIDDEN` |
-| PATCH | `/api/items/:id` | OWNER | 同 POST 可选字段集 | `200 { data: ItemDto }` | `INVALID_INPUT`, `FORBIDDEN`, `CLAIM_CONFLICT`(非 ACTIVE) |
-| POST | `/api/items/:id/archive` | OWNER | — | `200 { data: ItemDto }` | `FORBIDDEN`, `CLAIM_CONFLICT` |
+| GET | `/api/items` | MEMBER | query：`q?`, `category?`, `tradeType?`(FREE\|PAY_WHATEVER\|FIXED_PRICE\|OTHER), `status?`(默认 `ACTIVE`), `freshness?`(JUST_LISTED\|NEW\|OLDER), `favorite?`, `sort?`(默认 `latest`), `page=1`, `pageSize=20` | `200 { data: ItemDto[], pagination }` | `INVALID_INPUT` |
+| POST | `/api/items` | MEMBER | `{ communityId, name, category?, description, tradeType, price?, imageKeys?: string[] }` | `201 { data: ItemDto }` | `INVALID_INPUT`, `PAYLOAD_TOO_LARGE` |
+| GET | `/api/items/:id` | MEMBER | — | `200 { data: ItemDetailDto }` | `NOT_FOUND` |
+| PATCH | `/api/items/:id` | OWNER | 同 POST 可选字段集 | `200 { data: ItemDto }` | `INVALID_INPUT`, `CLAIM_CONFLICT`(非 ACTIVE) |
+| POST | `/api/items/:id/archive` | OWNER | — | `200 { data: ItemDto }` | `CLAIM_CONFLICT` |
+
+**价格 / 交易方式不变式（`price` ↔ `tradeType` 联动）**：
+
+- **核心不变式**：`price` **仅在 `tradeType === 'FIXED_PRICE'` 时有值**；其余交易方式（`FREE` / `PAY_WHATEVER` / `OTHER`）**一律 `null`**。
+- **`POST /api/items`**：非 `FIXED_PRICE` 却带了 `price`（**含 `0`**）→ 服务端**归一化为 `null`，不报错**（放宽输入）。**必填方向仍强制**：`FIXED_PRICE` 必须给价，否则 `INVALID_INPUT`。
+- **`PATCH /api/items/:id`**：先与现有记录**合并** `(tradeType, price)` 再校验——
+  - 合并后为 `FIXED_PRICE` 且 `price === null` → **`400 INVALID_INPUT`**；
+  - 合并后**非** `FIXED_PRICE` → `price` **强制 `null`**。
+- **DB 兜底（单向）**：`prisma/migrations/0001_init/migration.sql:104,107` 的两条 CHECK —— `price IS NULL OR price >= 0` 与 `tradeType <> 'FIXED_PRICE' OR price IS NOT NULL` —— **只单向强制**（**不**强制"非 `FIXED_PRICE` 时清空 `price`"）。服务端归一化正是为了让 **DB 与 API 两侧不变式同时成立**。
 
 **`ItemDto`**（列表项；D6：补入 `category`）：
 ```json
@@ -131,6 +146,9 @@
 **D2 排序（收敛为单一定义）**：默认 `sort=latest` ⇔ `WHERE status='ACTIVE' ORDER BY publishedAt DESC`（新鲜度即时间序，删除"未归档优先/新鲜度优先"冗余条款）。`sort=oldest` 为升序。`ARCHIVED` 不出现在本接口，仅经 `/api/me/items?status=ARCHIVED` 或 `/api/items?status=ARCHIVED`（归档视图）查看。
 > 定稿决策：`hiddenAt` 已随治理模块砍除，因此**索引 `@@index([communityId, status, publishedAt])` 与本查询谓词完全匹配**，不存在残余过滤。
 
+**`q` 检索语义**：对 `name` **或** `description` 做**大小写不敏感子串匹配**（PG `ILIKE`）。服务端**必须转义**用户输入中的 `%`、`_`、`\`，并使用 **`ILIKE … ESCAPE '\'`** —— 否则用户输入的一个 `%` 会被当作通配符（`%` 匹配全部），既是错误结果、也是（轻量）注入面。
+**`favorite` 语义**：`true` → 只返回**当前用户已收藏**的物品（按 `Favorite` 存在性判断）；`false` **或缺省** → **不加过滤**（它是**筛选器**，缺省即不筛；注意与"只看收藏"页 `GET /api/me/favorites` 不同，后者无该参数）。
+
 ---
 
 ## 3. 图片上传
@@ -149,13 +167,13 @@
 
 | Method | Path | 权限 | 请求 | 响应 | 错误 |
 |---|---|---|---|---|---|
-| POST | `/api/items/:id/claims` | MEMBER（非发布者） | `{ message?, preferredAt?, preferredLocation? }` | `201 { data: ClaimDto }` | `INVALID_INPUT`, `CLAIM_CONFLICT`(物品非 ACTIVE / 已有 PENDING), `FORBIDDEN` |
-| GET | `/api/items/:id/claims` | OWNER 或 申请人 | — | `200 { data: ClaimDto[] }` | `FORBIDDEN` |
+| POST | `/api/items/:id/claims` | MEMBER（非发布者） | `{ message?, preferredAt?, preferredLocation? }` | `201 { data: ClaimDto }` | `INVALID_INPUT`, `CLAIM_CONFLICT`(物品非 ACTIVE / 已有 PENDING) |
+| GET | `/api/items/:id/claims` | OWNER 或 申请人 | — | `200 { data: ClaimDto[] }` | — |
 | GET | `/api/me/claims` | MEMBER | query：`as=applied\|received`（我发起的 / 我收到的） | `200 { data: ClaimDto[] }` | — |
-| POST | `/api/claims/:id/accept` | OWNER | — | `200 { data: ClaimDto }` | `FORBIDDEN`, `CLAIM_CONFLICT` |
-| POST | `/api/claims/:id/reject` | OWNER | — | `200 { data: ClaimDto }` | `FORBIDDEN`, `CLAIM_CONFLICT` |
-| POST | `/api/claims/:id/cancel` | 申请人 | — | `200 { data: ClaimDto }` | `FORBIDDEN`, `CLAIM_CONFLICT` |
-| POST | `/api/claims/:id/complete` | OWNER | — | `200 { data: ClaimDto }` | `FORBIDDEN`, `CLAIM_CONFLICT` |
+| POST | `/api/claims/:id/accept` | OWNER | — | `200 { data: ClaimDto }` | `CLAIM_CONFLICT` |
+| POST | `/api/claims/:id/reject` | OWNER | — | `200 { data: ClaimDto }` | `CLAIM_CONFLICT` |
+| POST | `/api/claims/:id/cancel` | 申请人 | — | `200 { data: ClaimDto }` | `CLAIM_CONFLICT` |
+| POST | `/api/claims/:id/complete` | OWNER | — | `200 { data: ClaimDto }` | `CLAIM_CONFLICT` |
 
 **`ClaimDto`**：
 ```json
@@ -190,7 +208,7 @@
 | Method | Path | 权限 | 请求 | 响应 | 错误 |
 |---|---|---|---|---|---|
 | GET | `/api/items/:id/messages` | MEMBER | — | `200 { data: MessageDto[] }` | `NOT_FOUND` |
-| POST | `/api/items/:id/messages` | MEMBER | `{ content: string }` | `201 { data: MessageDto }` | `INVALID_INPUT`, `FORBIDDEN` |
+| POST | `/api/items/:id/messages` | MEMBER | `{ content: string }` | `201 { data: MessageDto }` | `INVALID_INPUT` |
 
 **`MessageDto`**：
 ```json
@@ -218,7 +236,7 @@
 | GET | `/api/me/favorites` | MEMBER | — | `200 { data: ItemDto[] }` | — |
 | GET | `/api/me/items` | MEMBER | query：`status?`(ACTIVE\|RESERVED\|ARCHIVED) | `200 { data: ItemDto[] }` | — |
 | GET | `/api/me/notifications` | MEMBER | query：`unreadOnly?` | `200 { data: NotificationDto[] }` | — |
-| POST | `/api/me/notifications/:id/read` | MEMBER | — | `200 { data: NotificationDto }` | `FORBIDDEN` |
+| POST | `/api/me/notifications/:id/read` | MEMBER | — | `200 { data: NotificationDto }` | — |
 
 **`NotificationDto`**：
 ```json
@@ -233,7 +251,7 @@
 
 | Method | Path | 权限 | 请求 | 响应 | 错误 |
 |---|---|---|---|---|---|
-| GET | `/api/stats/community` | MEMBER | query：`communityId?`(默认当前空间) | `200 { data: StatsDto }` | `FORBIDDEN` |
+| GET | `/api/stats/community` | MEMBER | query：`communityId?`(默认当前空间) | `200 { data: StatsDto }` | — |
 
 **`StatsDto`**：
 ```json

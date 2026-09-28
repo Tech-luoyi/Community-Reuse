@@ -356,9 +356,15 @@ function bucketFreshness(ageHours: number): { code: 'JUST_LISTED' | 'NEW' | 'OLD
 | 外键完整性 / 级联删除 / 归档不物理删除 | **DB 层（FK/未删）** | Prisma relation + `onDelete`；归档只写 `archivedAt` |
 | 图片 ≤6 张、类型 JPG/PNG/WebP、单张 ≤5MB | **应用层** | Zod + `uploads` 路由校验（前端压缩不构成信任，服务端独立校验） |
 | 同用户对同物品仅一个有效 `PENDING` | **应用层 + DB 兜底** | 事务内断言（`itemId+applicantId+status=PENDING` 唯一）+ 可选部分唯一索引 |
-| 交易方式与价格组合 / 身份与权限（成员/发布者/被接受申请人） | **应用层** | Zod + `auth/guard.ts`（权限由关系推导，无角色列） |
+| 价格↔交易方式不变式（`price` 仅 `FIXED_PRICE` 有值；非 `FIXED_PRICE` 归一化为 `null`） | **应用层** | Zod（`CreateItemRequestSchema`）+ 服务端归一化，见下方注 |
+| 身份与权限（成员/发布者/被接受申请人） | **应用层** | Zod + `auth/guard.ts`（权限由关系推导，无角色列） |
 
 > **D3 说明**：Prisma schema 无法表达 CHECK，故区间/条件约束写入 `prisma/migrations/<ts>_checks/migration.sql` 由 `prisma migrate` 执行，DB 层真正兜底；应用层只做"友好报错"。
+>
+> **价格↔交易方式不变式（落点明细）**：**唯一**合法组合为「`FIXED_PRICE ⇒ price ≠ null`」，其余交易方式「`⇒ price === null`」。落点：
+> - **`POST /api/items`**：非 `FIXED_PRICE` 带 `price`（**含 `0`**）→ 服务端**归一化为 `null`、不报错**；`FIXED_PRICE` 缺价 → `INVALID_INPUT`（Zod `superRefine` **只约束"必填"方向**）。
+> - **`PATCH /api/items/:id`**：与现有记录**合并后** `FIXED_PRICE` 且 `price===null` → `400 INVALID_INPUT`；合并后非 `FIXED_PRICE` → `price` **强制 `null`**。
+> - **DB 只单向兜底**：`prisma/migrations/0001_init/migration.sql:104,107` 的 `CHECK (price IS NULL OR price >= 0)` 与 `CHECK (tradeType <> 'FIXED_PRICE' OR price IS NOT NULL)` **仅**保证"价格非负"与"`FIXED_PRICE` 必有价"，**不**强制反向清空 ⇒ 由**服务端归一化**负责让 **DB 与 API 两侧不变式同时成立**。
 
 ### 4.5 设计合理性论证
 
@@ -747,8 +753,9 @@ stateDiagram-v2
 
 > 全文**依赖具体运行时/版本行为的断言**已做一轮自查，见 §6.7.1 表。
 
-#### 6.7 设计文档 ↔ 契约 一致性扫描（本轮附：统一枚举大小写）
-> 触发：工程师实现 `src/shared/schemas.ts` 时撞到「§6.2 A 期望 schema 小写 vs §8 响应示例大写」。此处**全量扫描**同类不一致（枚举取值 / 字段名 / 大小写 / 必填性 / 序列化形状 / 边界）。
+#### 6.7 设计文档 ↔ 契约 一致性扫描（第 1 轮：统一枚举大小写；第 2 轮：端点错误码列收敛）
+> 触发（第 1 轮）：工程师实现 `src/shared/schemas.ts` 时撞到「§6.2 A 期望 schema 小写 vs §8 响应示例大写」。此处**全量扫描**同类不一致（枚举取值 / 字段名 / 大小写 / 必填性 / 序列化形状 / 边界）。
+> 触发（第 2 轮，任务 #13 追加）：核对 `GET /api/me` 权限时发现各端点「错误」列对通用码 401/403 的收录**残缺不全、风格不一**（同类：漏记 401/403）——升级为**契约侧系统性归一**（新增 #16）。
 
 | # | 位置 | 设计文档侧 | 契约侧 | 裁决 | 改哪侧 | 理由 |
 |---|---|---|---|---|---|---|
@@ -767,8 +774,10 @@ stateDiagram-v2
 | 13 | 工具 `tradeType` 枚举 | §6.5.5：`FREE/PAY_WHATEVER/FIXED_PRICE/OTHER` | §2：同 | **一致** | 无 | 复用既有 `TradeType` |
 | 14 | `freshness` code | §7.4：`JUST_LISTED/NEW/OLDER` | §2：同 | **一致** | 无 | 逐值核对通过 |
 | 15 | **历史 24h 文档** | `tech-design.md` / `er-diagram.mermaid` / `peer-design-week1.md`：小写 `free\|flexible\|priced`、`trade_mode`、`status=available` | 非定稿 | **不改，标注为已废弃旧案** | 无 | 非事实源；三处定稿一致性只认 `tech-design-final.md` / `schema.prisma` / `api-contract.md` / `er-diagram-final.mermaid` |
+| 16 | 各端点「错误」列对**通用码**（401/403）收录残缺 / 风格不一 | 设计文档**未**逐端点列错误码（无对应列，不适用） | §1/§2/§4/§5/§7 各端点：`FORBIDDEN` 有的端点列、有的不列；`GET /api/me` 只列了 `UNAUTHENTICATED` 漏 `FORBIDDEN`（同类：漏 401/403） | **加 §0.3 全局规则**：错误列一律**只列端点特有码**，通用码 `UNAUTHENTICATED` / `FORBIDDEN` **不重复**；`—` = 无端点特有错误（受守卫端点仍可返 401/403） | **契约侧** | 逐端点补通用码必再漂移；「全局规则 + 只留特有」才可收敛（本轮已按此归一全部端点；设计文档侧无逐端点码列，零改动） |
 
-> 结论：**真正的枚举取值冲突只有 `mode` 一处（#1）**，连带 #2/#3/#4 同源修正；#5–#9 是**有意分层、非缺陷**（已文档化）；#10–#14 **一致**；#15 是**旧案遗留**（勿引用）。全部修改**仅落 `tech-design-final.md`**，`api-contract.md` **零改动**（其示例本就大写，是事实源）。
+> 结论（**第 1 轮**）：**真正的枚举取值冲突只有 `mode` 一处（#1）**，连带 #2/#3/#4 同源修正；#5–#9 是**有意分层、非缺陷**（已文档化）；#10–#14 **一致**；#15 是**旧案遗留**（勿引用）。该轮修改**仅落 `tech-design-final.md`**，`api-contract.md` **零改动**（其示例本就大写，是事实源）。
+> 结论（**第 2 轮**，任务 #13 追加）：新增 **#16**——各端点「错误」列对通用码 401/403 收录残缺/风格不一。**唯一改动落在契约侧**（新增 §0.3 全局规则 + 归一全部端点错误列，并回填 §0.2 的 `403 = FORBIDDEN` 码定义）。设计文档侧本无逐端点码列，**零改动**。
 
 #### 6.7.1 全文「依赖具体运行时/版本行为」断言的自查（可复现性）
 > 触发：这是设计文档里**第 4 次**出现「不可复现的技术断言」（前三次：F1 联系方式无写入路径、F3 `prisma validate` 声称通过、F5 时间预算算术；本次为 `Decimal` 措辞）。故对全文做一轮扫描 —— **凡"你凭什么这么说"，必须给得出可复现的验证路径**。
