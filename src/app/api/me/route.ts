@@ -2,8 +2,10 @@
  * `GET` / `PATCH /api/me` —— 当前用户资料（MEMBER）。
  *
  * 契约：docs/api-contract.md §1。
- *   - `GET  ` → `200 { data: { user, memberships, currentCommunity } }`；错误 `UNAUTHENTICATED`。
- *   - `PATCH` → `{ nickname?, contactText? }` → `200 { data: { user } }`；错误 `INVALID_INPUT` / `UNAUTHENTICATED`。
+ *   - `GET  ` → `200 { data: { user, memberships, currentCommunity } }`；
+ *             错误 `UNAUTHENTICATED`(401) / `FORBIDDEN`(403，会话所指社区非成员)。
+ *   - `PATCH` → `{ nickname?, contactText? }` → `200 { data: { user } }`；
+ *             错误 `INVALID_INPUT` / `UNAUTHENTICATED`(401) / `FORBIDDEN`(403，会话所指社区非成员)。
  *
  * ★ D1 闭环：`PATCH /api/me` 是 `contactText` 的**唯一写入入口**；空串等价于清空为 `null`。
  *   写入**不改变**可见性规则（仅对 ACCEPTED/COMPLETED 的交易对手方展示，见 §4 / auth/contact.ts）。
