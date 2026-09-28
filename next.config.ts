@@ -1,8 +1,10 @@
 import type { NextConfig } from 'next';
 
 /**
- * 本仓库当前只有后端（Route Handlers）。Next.js 仅作为 REST 接口的 HTTP 载体，
- * 不含任何页面 / 组件（客户本轮明确「前端不用管」）。
+ * Next.js 在这里同时承载 REST 接口（`/api/**` Route Handlers）与前端页面（App Router）。
+ *
+ * 刻意不配置 `images`：物品封面用原生 `<img>` 而不是 `next/image` —— 种子封面是 SVG，
+ * 走 next/image 必须打开 `dangerouslyAllowSVG`，那是个 XSS 口子，不值得为兜底盘承担。
  */
 const nextConfig: NextConfig = {
   reactStrictMode: true,

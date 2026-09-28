@@ -1,9 +1,9 @@
-# 邻里流转（community-reuse）· 后端工程
+# 邻里流转（community-reuse）
 
 > 面向 **小区 / 楼栋 / 办公室** 的闲置物品流转工具。
-> 本仓库当前为 **纯后端工程**（客户本轮指令：「前端不用管，你开始做后端吧，工程规范做好」）——
-> 只实现 `prisma/**`、`src/shared/**`、`src/server/**`、`src/app/api/**`、`tests/**` 与工程配置，
-> **不含任何页面 / 组件 / hooks**。
+> 本分支在既有后端之上补齐前端：`src/app/**` 页面、`src/components/**`、`src/hooks/**`
+> 与 `src/lib/**`（HTTP 出入口、React Query、表单与格式化工具）。
+> 后端仍是唯一事实源：前端只 import `src/shared/**` 的 Zod 契约，不碰 `src/server/**`（D8 解耦纪律）。
 
 ## 架构一句话
 
@@ -67,10 +67,14 @@ npm run prisma:generate
 npm run db:seed
 
 # 7) 启动开发服务器
-npm run dev
+npm run dev              # 默认 3000
+npm run dev -- -p 3001   # 与主工作树并行评审前端时用 3001（不要改共享的 dev 脚本）
 curl -s http://localhost:3000/api/health
 # => {"data":{"db":"ok","llm":false,"storage":"local"}}
 ```
+
+两套前端共用同一个库与同一个 `cr_session` Cookie（它不按端口隔离），
+所以两棵工作树的 `SESSION_SECRET` 必须逐字相同，否则切换端口会互相踢下线。
 
 停止数据库：`npm run db:down`。
 

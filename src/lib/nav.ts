@@ -43,14 +43,14 @@ export const NAV_SECTIONS: NavSection[] = [
     eyebrow: '工作台',
     items: [
       { href: '/items/new', label: '发布物品', icon: PlusCircle, stage: 'live' },
-      { href: '/dashboard', label: '数据看板', icon: LayoutDashboard, stage: 8 },
+      { href: '/dashboard', label: '数据看板', icon: LayoutDashboard, stage: 'live' },
     ],
   },
   {
     eyebrow: '个人',
     items: [
-      { href: '/favorites', label: '收藏', icon: Heart, stage: 8 },
-      { href: '/notifications', label: '通知', icon: Bell, stage: 8 },
+      { href: '/favorites', label: '收藏', icon: Heart, stage: 'live' },
+      { href: '/notifications', label: '通知', icon: Bell, stage: 'live' },
       { href: '/me', label: '资料', icon: User, stage: 'live' },
     ],
   },

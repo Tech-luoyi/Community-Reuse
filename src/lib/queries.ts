@@ -49,6 +49,8 @@ export interface ItemListFilter {
   tradeType?: TradeType | '';
   status?: ItemStatus;
   freshness?: FreshnessCode | '';
+  /** 只看我收藏过的：契约的 `favorite=true` 由服务端按当前会话过滤。 */
+  favorite?: boolean;
   sort?: ItemSort;
   page?: number;
   pageSize?: number;
@@ -67,6 +69,7 @@ export function serializeItemListQuery(
     tradeType: filter.tradeType || undefined,
     status: filter.status && filter.status !== 'ACTIVE' ? filter.status : undefined,
     freshness: filter.freshness || undefined,
+    favorite: filter.favorite === true ? 'true' : undefined,
     sort: filter.sort && filter.sort !== 'latest' ? filter.sort : undefined,
     page: filter.page && filter.page > 1 ? filter.page : undefined,
     pageSize: filter.pageSize && filter.pageSize !== 20 ? filter.pageSize : undefined,
@@ -176,5 +179,43 @@ export function useItemSummaries(ids: string[]): {
   return {
     summaries,
     isLoading: unique.length > 0 && results.some((result) => result.isPending),
+  };
+}
+
+/** 一页 100 条是契约硬上限。 */
+export const SCAN_PAGE_SIZE = 100;
+const SCAN_STATUSES: ItemStatus[] = ['ACTIVE', 'RESERVED', 'ARCHIVED'];
+
+/**
+ * 契约没有社区统计接口（§7），看板只能自己翻 `GET /api/items` 聚合。
+ * 三种状态各翻一页，所以社区物品多于 300 件时这里必然不完整 ——
+ * `truncated` 会一路带到界面上说清口径，而不是把抽样值当成全量值展示。
+ */
+export function useStatusScan(): {
+  items: ItemDto[];
+  truncated: boolean;
+  isPending: boolean;
+  isError: boolean;
+  refetch: () => void;
+} {
+  const results = useQueries({
+    queries: SCAN_STATUSES.map((status) => {
+      const query = serializeItemListQuery({ status, pageSize: SCAN_PAGE_SIZE });
+      return {
+        queryKey: qk.itemList(query),
+        queryFn: ({ signal }: { signal: AbortSignal }) =>
+          api.list('/api/items', ItemDtoSchema, query, signal),
+      };
+    }),
+  });
+
+  return {
+    items: results.flatMap((result) => result.data?.data ?? []),
+    truncated: results.some((result) => (result.data?.pagination.total ?? 0) > SCAN_PAGE_SIZE),
+    isPending: results.some((result) => result.isPending),
+    isError: results.some((result) => result.isError),
+    refetch: () => {
+      for (const result of results) void result.refetch();
+    },
   };
 }

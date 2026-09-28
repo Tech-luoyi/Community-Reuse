@@ -20,9 +20,9 @@ import { Stagger } from '@/components/ui/stagger';
 import { toMessage } from '@/lib/api';
 import { applyApiFieldErrors } from '@/lib/form';
 import { useLogout, usePatchMe } from '@/lib/mutations';
-import { useItemList, useSession } from '@/lib/queries';
+import { useSession, useStatusScan } from '@/lib/queries';
 import { CONTACT_TEXT_MAX, NICKNAME_MAX } from '@/shared/schemas';
-import type { ItemDto, MeResponseData } from '@/shared/types';
+import type { ItemDto, ItemStatus, MeResponseData } from '@/shared/types';
 
 /** 契约的 `PatchMeRequest` 两个字段都可选，但资料页提交时昵称必须非空。 */
 const ProfileSchema = z.object({
@@ -150,21 +150,19 @@ function Section({
   );
 }
 
+const MY_GROUPS: { status: ItemStatus; title: string; emptyHint: string }[] = [
+  { status: 'ACTIVE', title: '在架', emptyHint: '没有在架的物品' },
+  { status: 'RESERVED', title: '已预约', emptyHint: '没有被预约的物品' },
+  { status: 'ARCHIVED', title: '已归档', emptyHint: '还没有归档过物品' },
+];
+
 function MyItems() {
   const session = useSession();
   const myId = session.data?.user.id;
+  // 与看板共用同一套扫描口径，避免两处各自翻页导致数字对不上
+  const scan = useStatusScan();
 
-  const active = useItemList({ status: 'ACTIVE', pageSize: SCAN_PAGE_SIZE });
-  const reserved = useItemList({ status: 'RESERVED', pageSize: SCAN_PAGE_SIZE });
-  const archived = useItemList({ status: 'ARCHIVED', pageSize: SCAN_PAGE_SIZE });
-
-  const groups = [
-    { title: '在架', query: active, emptyHint: '没有在架的物品' },
-    { title: '已预约', query: reserved, emptyHint: '没有被预约的物品' },
-    { title: '已归档', query: archived, emptyHint: '还没有归档过物品' },
-  ];
-
-  if (groups.some((group) => group.query.isPending)) {
+  if (scan.isPending) {
     return (
       <Panel className="p-5">
         <RowSkeleton />
@@ -173,29 +171,42 @@ function MyItems() {
     );
   }
 
-  // 契约没有 /api/me/items，所以只能自己按 owner.id 过滤；
-  // 某一状态的社区总量超过一页时，这里给的是「第一页里我的那部分」，下方明说口径。
-  const truncated = groups.some(
-    (group) => (group.query.data?.pagination.total ?? 0) > SCAN_PAGE_SIZE,
-  );
+  if (scan.isError) {
+    return (
+      <Panel>
+        <EmptyState
+          icon={Package}
+          title="我的发布没读到"
+          desc="契约没有 /api/me/items，这一页是靠翻物品列表现算的，列表请求失败时这里就没有内容。"
+          action={
+            <Button variant="secondary" onClick={scan.refetch}>
+              重试
+            </Button>
+          }
+        />
+      </Panel>
+    );
+  }
+
+  const mine = scan.items.filter((item) => item.owner.id === myId);
 
   return (
     <div className="space-y-4">
-      {groups.map((group) => (
+      {MY_GROUPS.map((group) => (
         <Section
-          key={group.title}
+          key={group.status}
           title={group.title}
-          items={(group.query.data?.data ?? []).filter((item) => item.owner.id === myId)}
+          items={mine.filter((item) => item.status === group.status)}
           emptyHint={group.emptyHint}
         />
       ))}
 
-      {truncated && (
+      {scan.truncated && (
         <Inset>
           <div className="label-xs">口径说明</div>
           <p className="mt-1.5 text-[12.5px] leading-relaxed text-ink-2">
-            某个状态的社区物品总量超过 <span className="tnum">{SCAN_PAGE_SIZE}</span> 件时，
-            这里只翻了第一页，列表可能不含你更早的那几件。
+            某个状态的社区物品超过 <span className="tnum">{SCAN_PAGE_SIZE}</span> 件时只翻了第一页，
+            这里可能不含你更早的那几件。
           </p>
         </Inset>
       )}
