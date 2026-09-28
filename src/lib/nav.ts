@@ -51,7 +51,7 @@ export const NAV_SECTIONS: NavSection[] = [
     items: [
       { href: '/favorites', label: '收藏', icon: Heart, stage: 8 },
       { href: '/notifications', label: '通知', icon: Bell, stage: 8 },
-      { href: '/me', label: '资料', icon: User, stage: 6 },
+      { href: '/me', label: '资料', icon: User, stage: 'live' },
     ],
   },
   {
