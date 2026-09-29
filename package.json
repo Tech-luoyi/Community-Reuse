@@ -26,6 +26,7 @@
     "prisma:deploy": "prisma migrate deploy",
     "prisma:studio": "prisma studio",
     "db:seed": "tsx prisma/seed.ts",
+    "ai:setup-checkpoint": "tsx --env-file-if-exists=.env prisma/setup-checkpoint.ts",
     "prepare": "husky || true"
   },
   "dependencies": {

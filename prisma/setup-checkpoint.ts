@@ -1,8 +1,14 @@
 /**
  * 建 LangGraph checkpoint 表（一次性 DDL 脚本）。
  *
- * 用法：`npx tsx --env-file=.env prisma/setup-checkpoint.ts`
- *      （package.json 的 `ai:setup-checkpoint` 脚本待仓库空闲时补上，见下方说明）
+ * 用法：`npm run ai:setup-checkpoint`
+ *      （等价于 `tsx --env-file-if-exists=.env prisma/setup-checkpoint.ts`）
+ *
+ * ⚠️ **`--env-file-if-exists` 不是可有可无的**：本脚本在碰过 `@prisma/client` **之前**
+ * 就要读 `process.env.DATABASE_URL`。`tsx prisma/setup-checkpoint.ts` 会静默拿到 undefined，
+ * 于是报「DATABASE_URL 未配置」——而 `db:seed` 之所以能裸跑，是因为 Prisma Client 自己
+ * 会加载 `.env`，本脚本没有那个副作用。这个差别只在 CLI 入口暴露，vitest 下测不出来
+ * （测试环境已载入 env），所以曾经真的坏过一次。
  *
  * **为什么单独成脚本、不在请求路径上**：`PostgresSaver.setup()` 会 CREATE TABLE /
  * CREATE TYPE。放在请求里等于每个定价请求都可能抢一次 DDL 锁，既慢又会在并发下互相阻塞。
