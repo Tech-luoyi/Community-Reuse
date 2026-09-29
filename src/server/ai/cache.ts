@@ -1,16 +1,17 @@
 /**
  * LLM 结果缓存（`src/server/ai/cache.ts`）：**L1 进程内 LRU** + **L2 `AiCache` 表**。
  *
- * 事实源：docs/tech-design-final.md §6.1（缓存行）、§6.5.3（定价指纹，**T11 再扩展**）。
+ * 事实源：docs/tech-design-final.md §6.1（缓存行）、§6.5.3（定价社区数据指纹）。
  *
- * 键：`sha256(kind + 规范化输入)`。规范化 = 递归按 key 字典序排序的稳定 JSON，确保**同语义输入
- * 必得同键**（与调用方对象的属性书写顺序无关）。
+ * 键：无作用域为 `sha256(kind + 规范化输入)`；带作用域（定价）为
+ * `sha256(canonical({variant, kind, input, commFp}))`。规范化 = 递归按 key 字典序排序的稳定
+ * JSON，确保**同语义输入必得同键**（与调用方对象的属性书写顺序无关）。
  *
  * L2 为**尽力而为**：DB 抖动/不可用时缓存读写**静默失败**，绝不因此让接口降级或报错
  * （缓存失效只是"少省一次调用"，不是错误）。L1 命中即零延迟返回。
  *
  * 存储体（envelope）除模型输出外，**同时记录 `usedTools` / `toolCalls`**：`source` 回答"哪个引擎
- * 产出"，与"是否查了社区数据"正交（§6.6.4）——命中缓存时按缓存体内记录值回填，T11 引入工具后无需改表。
+ * 产出"，与"是否查了社区数据"正交（§6.6.5）——命中缓存时按缓存体内记录值回填。
  */
 import { createHash } from 'node:crypto';
 
@@ -21,12 +22,26 @@ import { prisma } from '@/server/db';
 /** L1 容量（LRU 上限）。 */
 const L1_MAX_ENTRIES = 200;
 
-/** 缓存存储体：模型输出 + 工具元信息。 */
+/**
+ * 缓存键的作用域扩展（§6.5.3）。
+ *
+ * 省略时维持 INC-1 的旧形状 `sha256(kind + 规范化输入)`——**润色 / FAQ 不依赖社区数据，
+ * 键必须逐字节不变**，否则一次改动就把两类缓存全部作废。
+ */
+export interface CacheKeyScope {
+  variant: string;
+  communityFingerprint: string;
+}
+
+/** 缓存存储体：模型输出 + 工具元信息（+ 定价的键命名空间，供事后归因）。 */
 export interface CacheEnvelope {
   /** 模型输出对象（已通过 schema 校验）。 */
   output: unknown;
   usedTools: boolean;
   toolCalls: number;
+  /** 仅带社区作用域的条目写入；自由文本落在 `outputJson`，不占 schema。 */
+  variant?: string;
+  commFp?: string;
 }
 
 /** L1：`key → envelope`。`Map` 的插入顺序即 LRU 顺序（最近使用的在末尾）。 */
@@ -60,11 +75,25 @@ function normalize(value: unknown): unknown {
   return value;
 }
 
-/** `sha256(kind + 规范化输入)` → 十六进制键。 */
-export function computeCacheKey(kind: AiKind, payload: unknown): string {
-  return createHash('sha256')
-    .update(`${kind}:${canonicalize(payload)}`)
-    .digest('hex');
+/**
+ * 计算缓存键。
+ *
+ * - **无作用域**（润色 / FAQ）：`sha256("kind:规范化输入")`，与 INC-1 逐字节一致。
+ * - **带作用域**（定价）：`sha256(canonical({variant, kind, input, commFp}))`。纳入
+ *   `commFp` 是为了堵住「不同社区互相命中」的静默跨租户泄漏（§6.5.3）；纳入 `variant`
+ *   使带工具与纯单轮的预映像**不同构**，无需新增 `AiKind` 枚举值。
+ */
+export function computeCacheKey(kind: AiKind, payload: unknown, scope?: CacheKeyScope): string {
+  const preimage =
+    scope === undefined
+      ? `${kind}:${canonicalize(payload)}`
+      : canonicalize({
+          variant: scope.variant,
+          kind,
+          input: payload,
+          commFp: scope.communityFingerprint,
+        });
+  return createHash('sha256').update(preimage).digest('hex');
 }
 
 /** 读 L1（命中即刷新 LRU 位置）。 */
@@ -136,8 +165,9 @@ export async function putL2(key: string, kind: AiKind, envelope: CacheEnvelope):
 export async function getCached(
   kind: AiKind,
   payload: unknown,
+  scope?: CacheKeyScope,
 ): Promise<{ key: string; envelope: CacheEnvelope } | null> {
-  const key = computeCacheKey(kind, payload);
+  const key = computeCacheKey(kind, payload, scope);
   const fromL1 = getL1(key);
   if (fromL1 !== null) {
     return { key, envelope: fromL1 };

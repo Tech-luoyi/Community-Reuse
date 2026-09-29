@@ -26,7 +26,8 @@ import type {
   PolishResult,
 } from '@/shared/types';
 
-import { computeCacheKey, getCached, putCached } from '@/server/ai/cache';
+import { type CacheKeyScope, computeCacheKey, getCached, putCached } from '@/server/ai/cache';
+import { computeCommunityFingerprint, PRICING_CACHE_VARIANT } from '@/server/ai/fingerprint';
 import { fallbackFaq, fallbackPolish, fallbackPricing } from '@/server/ai/fallback';
 import {
   type ChatMessage,
@@ -71,6 +72,10 @@ interface RunLlmSpec<T> {
   temperature: number;
   /** 参与缓存键的**规范化输入**（须覆盖一切影响输出的字段）。 */
   cachePayload: unknown;
+  /**
+   * 缓存键作用域（§6.5.3）。**仅定价传**：润色 / FAQ 不依赖社区数据，键必须逐字节不变。
+   */
+  cacheScope?: CacheKeyScope;
   fallback: () => T;
 }
 
@@ -95,9 +100,9 @@ function parseAndValidate<T>(content: string, schema: ParseSchema<T>): T | null 
  * 通用编排：缓存短路 → 模型 → 校验 → REPAIR(≤1) → 降级。
  */
 async function runLlm<T>(spec: RunLlmSpec<T>): Promise<RunLlmResult<T>> {
-  const key = computeCacheKey(spec.kind, spec.cachePayload);
+  const key = computeCacheKey(spec.kind, spec.cachePayload, spec.cacheScope);
 
-  const cached = await getCached(spec.kind, spec.cachePayload);
+  const cached = await getCached(spec.kind, spec.cachePayload, spec.cacheScope);
   if (cached !== null) {
     return {
       output: cached.envelope.output as T,
@@ -140,12 +145,31 @@ async function runLlm<T>(spec: RunLlmSpec<T>): Promise<RunLlmResult<T>> {
     };
   }
 
-  await putCached(key, spec.kind, { output, ...NO_TOOLS });
+  await putCached(key, spec.kind, {
+    output,
+    ...NO_TOOLS,
+    // 键命名空间与指纹写进 outputJson 供事后归因（不占表结构，§6.5.3）。
+    ...(spec.cacheScope === undefined
+      ? {}
+      : {
+          variant: spec.cacheScope.variant,
+          commFp: spec.cacheScope.communityFingerprint,
+        }),
+  });
   return { output, meta: { degraded: false, source: 'llm', ...NO_TOOLS } };
 }
 
-/** `POST /api/ai/pricing`（§8 A）：智能定价建议。 */
-export async function generatePricing(input: PricingRequest): Promise<PricingResult> {
+/**
+ * `POST /api/ai/pricing`（§8 A）：智能定价建议。
+ *
+ * `communityId` **只允许来自服务端会话**（route 传 `viewer.currentCommunityId`）：它决定缓存
+ * 指纹的租户维度，若可被请求体左右，等价于把跨租户隔离交还给客户端（§6.5.6 第 1 条）。
+ */
+export async function generatePricing(
+  input: PricingRequest,
+  communityId: string,
+): Promise<PricingResult> {
+  const commFp = await computeCommunityFingerprint(communityId);
   const { output, meta } = await runLlm<PricingModelOutput>({
     kind: 'PRICING',
     messages: [
@@ -160,6 +184,7 @@ export async function generatePricing(input: PricingRequest): Promise<PricingRes
       description: input.description ?? null,
       category: input.category ?? null,
     },
+    cacheScope: { variant: PRICING_CACHE_VARIANT, communityFingerprint: commFp },
     fallback: () => fallbackPricing(input),
   });
   return { ...meta, ...output };

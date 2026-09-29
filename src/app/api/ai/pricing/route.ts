@@ -22,6 +22,7 @@ export const POST = withRoute(async (request: Request): Promise<Response> => {
   enforceAiRateLimit(viewer.id);
 
   const body = await parseJsonBody(request, PricingRequestSchema);
-  const result = await generatePricing(body);
+  // 社区只取会话：它决定定价缓存指纹的租户维度，不可由请求体左右（§6.5.6 第 1 条）。
+  const result = await generatePricing(body, viewer.currentCommunityId);
   return jsonOk(result);
 });

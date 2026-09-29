@@ -22,6 +22,8 @@ const mocks = vi.hoisted(() => ({
   loadItem: vi.fn(),
   itemFindUnique: vi.fn(),
   communityFindUnique: vi.fn(),
+  // 定价服务层会先算社区成交数据指纹（§6.5.3），故 prisma mock 必须提供 $queryRaw。
+  queryRaw: vi.fn(),
 }));
 
 vi.mock('@/server/ai/cache', () => ({
@@ -37,6 +39,7 @@ vi.mock('@/server/db', () => ({
   prisma: {
     item: { findUnique: mocks.itemFindUnique },
     community: { findUnique: mocks.communityFindUnique },
+    $queryRaw: mocks.queryRaw,
   },
 }));
 
@@ -58,6 +61,9 @@ describe('ai.service：定价/润色/FAQ 编排', () => {
   beforeEach(() => {
     mocks.getCached.mockReset();
     mocks.putCached.mockReset();
+    // 定价会算社区指纹；默认给「空成交集合」，让键稳定且不抛错。
+    mocks.queryRaw.mockReset();
+    mocks.queryRaw.mockResolvedValue([{ count: 0, maxUpdatedAt: null }]);
     mocks.computeCacheKey.mockReset();
     mocks.loadItem.mockReset();
     mocks.itemFindUnique.mockReset();
@@ -79,7 +85,7 @@ describe('ai.service：定价/润色/FAQ 编排', () => {
 
   it('无 Key ⇒ 降级为规则结果，且**一次模型调用都没有**', async () => {
     vi.stubEnv('LLM_API_KEY', '');
-    const result = await generatePricing({ name: '婴儿车' });
+    const result = await generatePricing({ name: '婴儿车' }, 'c1');
 
     expect(fetchMock).not.toHaveBeenCalled();
     expect(result).toMatchObject({
@@ -99,7 +105,7 @@ describe('ai.service：定价/润色/FAQ 编排', () => {
       fetchMock.mockResolvedValue(
         contentResponse(JSON.stringify({ mode: raw, priceRange: null, reason: 'ok' })),
       );
-      const result = await generatePricing({ name: '台灯' });
+      const result = await generatePricing({ name: '台灯' }, 'c1');
       expect(result.mode).toBe('FREE');
       expect(result.degraded).toBe(false);
       expect(result.source).toBe('llm');
@@ -113,7 +119,7 @@ describe('ai.service：定价/润色/FAQ 编排', () => {
     fetchMock
       .mockResolvedValueOnce(contentResponse('这不是 JSON'))
       .mockResolvedValueOnce(contentResponse('仍然不是 JSON'));
-    const result = await generatePricing({ name: '台灯' });
+    const result = await generatePricing({ name: '台灯' }, 'c1');
 
     expect(fetchMock).toHaveBeenCalledTimes(2); // 首次 + 修补轮各 1 次
     expect(result).toMatchObject({
@@ -139,7 +145,7 @@ describe('ai.service：定价/润色/FAQ 编排', () => {
         }),
       ),
     );
-    const result = await generatePricing({ name: '台灯' });
+    const result = await generatePricing({ name: '台灯' }, 'c1');
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(result).toMatchObject({ mode: 'PRICED', degraded: false, source: 'llm' });
@@ -148,7 +154,7 @@ describe('ai.service：定价/润色/FAQ 编排', () => {
   it('5xx ⇒ 重试后仍失败 ⇒ 降级（共 2 次 fetch）', async () => {
     vi.stubEnv('LLM_API_KEY', 'k');
     fetchMock.mockResolvedValue(jsonResponse(503, {}));
-    const result = await generatePricing({ name: '台灯' });
+    const result = await generatePricing({ name: '台灯' }, 'c1');
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(result).toMatchObject({ degraded: true, source: 'rule' });
   });
@@ -176,7 +182,7 @@ describe('ai.service：定价/润色/FAQ 编排', () => {
         toolCalls: 0,
       },
     });
-    const result = await generatePricing({ name: '台灯' });
+    const result = await generatePricing({ name: '台灯' }, 'c1');
 
     expect(fetchMock).not.toHaveBeenCalled();
     expect(mocks.putCached).not.toHaveBeenCalled();

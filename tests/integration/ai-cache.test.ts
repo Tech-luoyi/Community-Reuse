@@ -13,7 +13,8 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { POST as faqPOST } from '@/app/api/ai/faq/route';
 import { POST as polishPOST } from '@/app/api/ai/polish/route';
 import { POST as pricingPOST } from '@/app/api/ai/pricing/route';
-import { clearL1, computeCacheKey } from '@/server/ai/cache';
+import { type CacheKeyScope, clearL1, computeCacheKey } from '@/server/ai/cache';
+import { PRICING_CACHE_VARIANT, computeCommunityFingerprint } from '@/server/ai/fingerprint';
 import { resetAiRateLimit } from '@/server/ai/rate-limit';
 import { prisma } from '@/server/db';
 import { generatePricing } from '@/server/ai/service';
@@ -48,6 +49,7 @@ describe('AI 缓存与三接口（真连库）', () => {
   let fx: TenantFixtures;
   let ownerToken: string;
   let cacheKey = '';
+  let cacheScope: CacheKeyScope;
   const originalKey = process.env.LLM_API_KEY;
 
   beforeAll(async () => {
@@ -57,7 +59,13 @@ describe('AI 缓存与三接口（真连库）', () => {
     resetAiRateLimit();
     clearL1();
 
-    cacheKey = computeCacheKey('PRICING', CACHE_PAYLOAD);
+    // 键必须按服务层同样的方式推导（含社区成交数据指纹），而非硬编码——
+    // 这样本测试同时守住 §6.5.3：定价缓存条目是按租户分域的。
+    cacheScope = {
+      variant: PRICING_CACHE_VARIANT,
+      communityFingerprint: await computeCommunityFingerprint(fx.communityAId),
+    };
+    cacheKey = computeCacheKey('PRICING', CACHE_PAYLOAD, cacheScope);
     await pool.query(`DELETE FROM "AiCache" WHERE "inputHash" = $1`, [cacheKey]);
   });
 
@@ -95,7 +103,7 @@ describe('AI 缓存与三接口（真连库）', () => {
     );
     vi.stubGlobal('fetch', fetchMock);
 
-    const first = await generatePricing(CACHE_INPUT);
+    const first = await generatePricing(CACHE_INPUT, fx.communityAId);
     expect(first).toMatchObject({ mode: 'PRICED', degraded: false, source: 'llm' });
     expect(fetchMock).toHaveBeenCalledTimes(1);
 
@@ -109,7 +117,7 @@ describe('AI 缓存与三接口（真连库）', () => {
     const shouldNotCall = vi.fn().mockRejectedValue(new Error('模型不应被调用'));
     vi.stubGlobal('fetch', shouldNotCall);
 
-    const second = await generatePricing(CACHE_INPUT);
+    const second = await generatePricing(CACHE_INPUT, fx.communityAId);
     expect(second).toMatchObject({ mode: 'PRICED', degraded: false, source: 'cache' });
     expect(shouldNotCall).not.toHaveBeenCalled();
   });
