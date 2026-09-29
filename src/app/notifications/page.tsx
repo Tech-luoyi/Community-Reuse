@@ -1,22 +1,63 @@
 'use client';
 
 import Link from 'next/link';
-import { BellRing, CheckCheck } from 'lucide-react';
+import {
+  Archive,
+  BellRing,
+  CheckCheck,
+  Check,
+  Handshake,
+  PackageCheck,
+  UserPlus,
+  X,
+} from 'lucide-react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { get, post } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import { formatDateTime } from '@/lib/format';
+import type { BadgeTone } from '@/components/ui';
 import { Button, EmptyState, ErrorPanel, SectionTitle, Skeleton } from '@/components/ui';
 import type { NotificationDto } from '@/shared/schemas';
 
-const TYPE_ICON: Record<string, { e: string; bg: string }> = {
-  CLAIM_RECEIVED: { e: '🙋', bg: 'from-amber-400 to-orange-500' },
-  CLAIM_ACCEPTED: { e: '🎉', bg: 'from-emerald-400 to-teal-500' },
-  CLAIM_REJECTED: { e: '🙅', bg: 'from-stone-400 to-stone-500' },
-  CLAIM_COMPLETED: { e: '🤝', bg: 'from-sky-400 to-blue-500' },
-  ITEM_RESERVED: { e: '📌', bg: 'from-violet-400 to-purple-500' },
-  ITEM_ARCHIVED: { e: '📦', bg: 'from-rose-400 to-pink-500' },
+/**
+ * 通知类型 → 图标 + 色调。
+ *
+ * 上一版这里是 `{ e: '🙋', bg: 'from-amber-400 to-orange-500' }` ——
+ * 六种通知配六个 emoji 和六套渐变，扫一眼列表就像一排彩色糖果。
+ * 现在统一用 lucide 图标，色彩只取自状态色板。
+ */
+const TYPE_META: Record<string, { Icon: typeof BellRing; tone: BadgeTone }> = {
+  CLAIM_RECEIVED: { Icon: UserPlus, tone: 'pending' },
+  CLAIM_ACCEPTED: { Icon: Check, tone: 'available' },
+  CLAIM_REJECTED: { Icon: X, tone: 'danger' },
+  CLAIM_COMPLETED: { Icon: Handshake, tone: 'done' },
+  ITEM_RESERVED: { Icon: PackageCheck, tone: 'reserved' },
+  ITEM_ARCHIVED: { Icon: Archive, tone: 'archived' },
+};
+
+const TONE_ICON_CLASS: Record<BadgeTone, string> = {
+  available: 'text-available',
+  reserved: 'text-reserved',
+  info: 'text-info',
+  pending: 'text-pending',
+  danger: 'text-danger',
+  done: 'text-ink-secondary',
+  archived: 'text-archived',
+  ai: 'text-ai',
+  neutral: 'text-ink-secondary',
+};
+
+const TONE_SURFACE_CLASS: Record<BadgeTone, string> = {
+  available: 'bg-available-bg',
+  reserved: 'bg-reserved-bg',
+  info: 'bg-info-bg',
+  pending: 'bg-pending-bg',
+  danger: 'bg-danger-bg',
+  done: 'bg-surface-sunken',
+  archived: 'bg-surface-sunken',
+  ai: 'bg-ai-bg',
+  neutral: 'bg-surface-sunken',
 };
 
 export default function NotificationsPage() {
@@ -43,14 +84,14 @@ export default function NotificationsPage() {
     await Promise.all(unread.map((n) => post(`/api/me/notifications/${n.id}/read`)));
     await qc.invalidateQueries({ queryKey: ['notifications'] });
     await qc.invalidateQueries({ queryKey: ['notifications-badge'] });
-    toast.success(`已读 ${unread.length} 条 ✅`);
+    toast.success(`已读 ${unread.length} 条`);
   }
 
   if (isLoading) {
     return (
-      <div className="mx-auto max-w-2xl space-y-3">
+      <div className="mx-auto max-w-2xl space-y-2">
         {Array.from({ length: 4 }).map((_, i) => (
-          <Skeleton key={i} className="h-20" />
+          <Skeleton key={i} className="h-16" />
         ))}
       </div>
     );
@@ -58,20 +99,14 @@ export default function NotificationsPage() {
 
   if (isError || !data) {
     return (
-      <div className="mx-auto max-w-2xl">
-        <SectionTitle
-          kicker="通知"
-          title="站内通知"
-          desc="读取失败时不放数字，也不显示「全部已读」。"
+      <div className="mx-auto max-w-2xl space-y-4">
+        <SectionTitle kicker="通知" title="站内通知" />
+        <ErrorPanel
+          title="通知读取失败"
+          hint="接口已就位，读不到就是出错了。"
+          onRetry={() => void refetch()}
+          fetching={isFetching}
         />
-        <div className="mt-4">
-          <ErrorPanel
-            title="通知读取失败"
-            hint="接口已就位，读不到就是出错了。"
-            onRetry={() => void refetch()}
-            fetching={isFetching}
-          />
-        </div>
       </div>
     );
   }
@@ -83,61 +118,73 @@ export default function NotificationsPage() {
       <div className="flex items-end justify-between gap-3">
         <SectionTitle
           kicker="通知中心"
-          title={
-            <>
-              消息<span className="text-amber-500">不错过</span>
-            </>
-          }
-          desc={unreadCount ? `${unreadCount} 条未读` : '全部已读 🎉'}
+          title="消息"
+          desc={unreadCount ? `${unreadCount} 条未读` : '全部已读'}
         />
-        <Button variant="outline" size="sm" onClick={markAll}>
-          <CheckCheck size={15} /> 全部已读
+        <Button variant="secondary" size="sm" onClick={markAll} disabled={unreadCount === 0}>
+          <CheckCheck size={14} /> 全部已读
         </Button>
       </div>
 
-      <div className="space-y-2">
+      <div className="space-y-1.5">
         {data.length === 0 && (
-          <EmptyState emoji="🔕" title="还没有通知" hint="有人对你的物品点“想要”时会出现在这里。" />
+          <EmptyState
+            icon={<BellRing size={18} />}
+            title="还没有通知"
+            hint="有人对你的物品点「想要」时会出现在这里。"
+          />
         )}
         {data.map((n) => {
-          const icon = TYPE_ICON[n.type] ?? { e: '🔔', bg: 'from-stone-400 to-stone-500' };
+          const meta = TYPE_META[n.type] ?? { Icon: BellRing, tone: 'neutral' as BadgeTone };
+          const { Icon } = meta;
           return (
             <button
               key={n.id}
               onClick={() => markRead(n.id)}
               className={cn(
-                'flex w-full items-center gap-3 rounded-3xl border p-4 text-left transition',
+                'flex w-full items-start gap-3 rounded-lg border p-3 text-left transition-colors',
                 n.readAt
-                  ? 'border-stone-200/70 bg-white/60'
-                  : 'border-amber-300/70 bg-gradient-to-r from-amber-50 to-white shadow-[0_4px_18px_rgba(245,158,11,.14)]',
+                  ? 'border-line bg-surface hover:bg-surface-sunken'
+                  : 'border-line bg-surface hover:bg-surface-sunken',
               )}
             >
               <span
-                className={`grid h-11 w-11 shrink-0 place-items-center rounded-2xl bg-gradient-to-br ${icon.bg} text-xl shadow-md`}
+                className={cn(
+                  'grid size-8 shrink-0 place-items-center rounded-md',
+                  TONE_SURFACE_CLASS[meta.tone],
+                  TONE_ICON_CLASS[meta.tone],
+                )}
               >
-                {icon.e}
+                <Icon size={15} />
               </span>
               <span className="min-w-0 flex-1">
                 <span className="flex items-center gap-2">
-                  <span className="truncate text-sm font-black">{n.title}</span>
-                  {!n.readAt && (
-                    <span className="h-2 w-2 shrink-0 animate-pulse rounded-full bg-amber-500" />
-                  )}
-                  <span className="ml-auto shrink-0 text-[11px] font-bold text-stone-400">
+                  <span
+                    className={cn(
+                      'truncate text-sm',
+                      n.readAt ? 'text-ink-secondary' : 'font-medium text-ink',
+                    )}
+                  >
+                    {n.title}
+                  </span>
+                  {!n.readAt && <span className="size-1.5 shrink-0 rounded-full bg-info" />}
+                  <span className="ml-auto shrink-0 text-[11px] text-ink-tertiary tabular">
                     {formatDateTime(n.createdAt)}
                   </span>
                 </span>
-                <span className="mt-0.5 block truncate text-xs text-stone-500">{n.content}</span>
+                <span className="mt-0.5 block truncate text-[13px] text-ink-secondary">
+                  {n.content}
+                </span>
               </span>
             </button>
           );
         })}
       </div>
 
-      <div className="flex items-center justify-center gap-2 pt-2 text-xs font-bold text-stone-400">
-        <BellRing size={13} /> 悬停 → 点击标记已读
-        <Link href="/requests" className="text-emerald-600 hover:underline">
-          · 去处理领取申请 →
+      <div className="flex items-center justify-center gap-2 pt-1 text-xs text-ink-tertiary">
+        <span>点击一条即标记已读</span>
+        <Link href="/requests" className="inline-flex items-center gap-1 hover:text-ink">
+          去处理领取申请
         </Link>
       </div>
     </div>

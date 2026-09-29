@@ -1,5 +1,4 @@
 import type { Metadata } from 'next';
-import { AmbientBackground } from '@/components/AmbientBackground';
 import { AppShell } from '@/components/AppShell';
 import { Providers } from '@/components/providers';
 import { TooltipProvider } from '@/components/ui/tooltip';
@@ -16,7 +15,6 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <body>
         <TooltipProvider>
           <Providers>
-            <AmbientBackground />
             <AppShell>{children}</AppShell>
           </Providers>
         </TooltipProvider>

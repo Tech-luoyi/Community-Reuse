@@ -1,7 +1,6 @@
 'use client';
 
-import { motion } from 'framer-motion';
-import { ArrowDownWideNarrow, RotateCcw, Search, SlidersHorizontal, Sparkles } from 'lucide-react';
+import { ArrowDownWideNarrow, RotateCcw, Search, SlidersHorizontal } from 'lucide-react';
 import { useState } from 'react';
 import { cn } from '@/lib/utils';
 import { Input } from './ui';
@@ -10,16 +9,16 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from '@/co
 
 const TRADE_TABS = [
   { value: '', label: '全部' },
-  { value: 'FREE', label: '🎁 免费' },
-  { value: 'PAY_WHATEVER', label: '☕ 随便给' },
-  { value: 'FIXED_PRICE', label: '🏷️ 标价' },
+  { value: 'FREE', label: '免费送' },
+  { value: 'PAY_WHATEVER', label: '随便给' },
+  { value: 'FIXED_PRICE', label: '标价' },
 ];
 
 const FRESH_TABS = [
   { value: '', label: '不限时间' },
-  { value: 'JUST_LISTED', label: '⚡ 刚上架' },
-  { value: 'NEW', label: '✨ 新上架' },
-  { value: 'OLDER', label: '📚 更早' },
+  { value: 'JUST_LISTED', label: '刚上架' },
+  { value: 'NEW', label: '新上架' },
+  { value: 'OLDER', label: '更早' },
 ];
 
 export interface FilterValue {
@@ -39,6 +38,14 @@ function activeCount(value: FilterValue): number {
   );
 }
 
+/**
+ * 筛选组控件。
+ *
+ * 上一版这里有三处问题：标签文字里内嵌 emoji（`🎁 免费`、`⚡ 刚上架`），
+ * 选中态用 `layoutId` 做弹簧位移动画（一个筛选组常驻一个 `framer-motion`
+ * 组件，切换时还要重排），以及一个深色 `bg-stone-900` 排序按钮 —— 排序是
+ * 辅助操作，不该比筛选更醒目。现在都是静态类名切换，无动画、无 emoji。
+ */
 export function FilterBar({
   value,
   onChange,
@@ -50,70 +57,58 @@ export function FilterBar({
   const [sheetOpen, setSheetOpen] = useState(false);
   const pending = activeCount(value);
 
+  const pillClass = (active: boolean) =>
+    cn(
+      'h-8 rounded-full border px-3 text-[13px] transition-colors',
+      active
+        ? 'border-ink bg-ink text-white'
+        : 'border-line bg-surface text-ink-secondary hover:border-line-strong hover:text-ink',
+    );
+
   const tradeRow = (idSuffix: string) => (
-    <div className="flex flex-wrap items-center gap-2">
-      {TRADE_TABS.map((t) => {
-        const active = value.tradeType === t.value;
-        return (
-          <button
-            key={t.value}
-            onClick={() => set({ tradeType: t.value })}
-            className={cn(
-              'relative rounded-full px-3.5 py-1.5 text-[13px] font-bold transition',
-              active ? 'text-white' : 'bg-stone-100 text-stone-600 hover:bg-stone-200',
-            )}
-          >
-            {active && (
-              <motion.span
-                layoutId={`trade-pill-${idSuffix}`}
-                className="absolute inset-0 rounded-full bg-stone-900"
-                transition={{ type: 'spring', stiffness: 420, damping: 32 }}
-              />
-            )}
-            <span className="relative">{t.label}</span>
-          </button>
-        );
-      })}
+    <div className="flex flex-wrap items-center gap-1.5" key={`trade-${idSuffix}`}>
+      {TRADE_TABS.map((t) => (
+        <button
+          key={t.value}
+          onClick={() => set({ tradeType: t.value })}
+          aria-pressed={value.tradeType === t.value}
+          className={pillClass(value.tradeType === t.value)}
+        >
+          {t.label}
+        </button>
+      ))}
     </div>
   );
 
   const freshRow = (
-    <div className="flex flex-wrap items-center gap-2">
-      {FRESH_TABS.map((t) => {
-        const active = value.freshness === t.value;
-        return (
-          <button
-            key={t.value}
-            onClick={() => set({ freshness: t.value })}
-            className={cn(
-              'rounded-full border px-3 py-1.5 text-xs font-bold transition',
-              active
-                ? 'border-emerald-500 bg-emerald-50 text-emerald-700'
-                : 'border-stone-200 text-stone-500 hover:border-stone-300',
-            )}
-          >
-            {t.label}
-          </button>
-        );
-      })}
+    <div className="flex flex-wrap items-center gap-1.5">
+      {FRESH_TABS.map((t) => (
+        <button
+          key={t.value}
+          onClick={() => set({ freshness: t.value })}
+          aria-pressed={value.freshness === t.value}
+          className={pillClass(value.freshness === t.value)}
+        >
+          {t.label}
+        </button>
+      ))}
     </div>
   );
 
   const sortRow = (
-    <div className="flex items-center gap-2 text-xs font-bold text-stone-500">
+    <div className="flex items-center gap-2 text-xs text-ink-tertiary">
       <button
         onClick={() => set({ sort: value.sort === 'latest' ? 'oldest' : 'latest' })}
-        className="inline-flex items-center gap-1.5 rounded-full bg-stone-900 px-3 py-1.5 text-white transition hover:bg-emerald-700"
+        className="inline-flex h-8 items-center gap-1.5 rounded-full border border-line bg-surface px-3 text-[13px] text-ink-secondary transition-colors hover:border-line-strong hover:text-ink"
       >
-        <ArrowDownWideNarrow size={14} />
+        <ArrowDownWideNarrow size={13} />
         {value.sort === 'latest' ? '越新越前' : '越老越前'}
       </button>
-      <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2.5 py-1 text-amber-800">
-        <Sparkles size={12} /> 新鲜度即时间序
-      </span>
+      <span className="hidden sm:inline">默认按新鲜度排序</span>
       <button
         onClick={() => onChange(EMPTY_FILTER)}
-        className="ml-auto inline-flex items-center gap-1 rounded-full px-2 py-1 hover:bg-stone-100"
+        disabled={pending === 0 && !value.q}
+        className="ml-auto inline-flex h-8 items-center gap-1.5 rounded-full px-2.5 text-[13px] text-ink-tertiary transition-colors hover:bg-surface-sunken hover:text-ink disabled:opacity-40"
       >
         <RotateCcw size={12} /> 重置
       </button>
@@ -121,23 +116,23 @@ export function FilterBar({
   );
 
   return (
-    <div className="space-y-3 rounded-3xl border border-stone-200/70 bg-white/80 p-4 shadow-sm">
+    <div className="space-y-3 rounded-lg border border-line bg-surface p-3">
       <div className="flex gap-2">
         <div className="relative flex-1">
           <Search
-            size={17}
-            className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-stone-400"
+            size={15}
+            className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-ink-tertiary"
           />
           <Input
             value={value.q}
             onChange={(e) => set({ q: e.target.value })}
-            placeholder="搜婴儿车、电磁炉、绿植…试试「书」"
-            className="h-12 rounded-2xl pl-11 text-[15px]"
+            placeholder="搜物品名称或描述"
+            className="h-9 pl-9 pr-16"
           />
           {value.q && (
             <button
               onClick={() => set({ q: '' })}
-              className="absolute right-3 top-1/2 -translate-y-1/2 rounded-full bg-stone-100 px-2.5 py-1 text-xs font-bold text-stone-500 hover:bg-stone-200"
+              className="absolute right-1.5 top-1/2 h-6 -translate-y-1/2 rounded-md px-2 text-xs text-ink-tertiary transition-colors hover:bg-surface-sunken hover:text-ink"
             >
               清空
             </button>
@@ -147,34 +142,31 @@ export function FilterBar({
         {/* 移动端：筛选项收进 Sheet（设计文档 §6.2）。宽屏隐藏。 */}
         <Sheet open={sheetOpen} onOpenChange={setSheetOpen}>
           <SheetTrigger asChild>
-            <Button
-              variant="outline"
-              className="h-12 shrink-0 gap-2 rounded-2xl px-4 text-sm font-bold sm:hidden"
-            >
-              <SlidersHorizontal size={16} />
+            <Button variant="secondary" className="h-9 shrink-0 gap-1.5 sm:hidden">
+              <SlidersHorizontal size={15} />
               筛选
               {pending > 0 && (
-                <span className="grid h-5 min-w-5 place-items-center rounded-full bg-emerald-500 px-1 text-[11px] font-black text-white">
+                <span className="ml-0.5 grid size-4 place-items-center rounded-full bg-ink text-[10px] font-medium text-white tabular">
                   {pending}
                 </span>
               )}
             </Button>
           </SheetTrigger>
-          <SheetContent side="bottom" className="rounded-t-3xl">
+          <SheetContent side="bottom" className="rounded-t-xl">
             <SheetHeader>
-              <SheetTitle className="text-base font-black">筛选与排序</SheetTitle>
+              <SheetTitle className="text-sm font-semibold">筛选与排序</SheetTitle>
             </SheetHeader>
-            <div className="space-y-4 px-4 pb-4">
+            <div className="space-y-5 px-4 pb-6">
               <div className="space-y-2">
-                <div className="text-xs font-bold text-stone-500">交易方式</div>
+                <div className="text-xs font-medium text-ink-tertiary">交易方式</div>
                 {tradeRow('sheet')}
               </div>
               <div className="space-y-2">
-                <div className="text-xs font-bold text-stone-500">新鲜度</div>
+                <div className="text-xs font-medium text-ink-tertiary">新鲜度</div>
                 {freshRow}
               </div>
               <div className="space-y-2">
-                <div className="text-xs font-bold text-stone-500">排序</div>
+                <div className="text-xs font-medium text-ink-tertiary">排序</div>
                 {sortRow}
               </div>
             </div>
@@ -183,12 +175,11 @@ export function FilterBar({
       </div>
 
       {/* 宽屏：筛选项内联展示。移动端隐藏（已进 Sheet）。 */}
-      <div className="hidden flex-wrap items-center gap-2 sm:flex">
+      <div className="hidden flex-wrap items-center gap-x-4 gap-y-3 sm:flex">
         {tradeRow('inline')}
-        <span className="mx-1 h-5 w-px bg-stone-200" />
         {freshRow}
       </div>
-      <div className="hidden sm:block">{sortRow}</div>
+      <div className="hidden border-t border-line pt-3 sm:block">{sortRow}</div>
     </div>
   );
 }

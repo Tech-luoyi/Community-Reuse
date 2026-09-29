@@ -5,7 +5,7 @@ import { Loader2, Package } from 'lucide-react';
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { get } from '@/lib/api';
-import { formatPrice, ITEM_STATUS_LABEL } from '@/lib/format';
+import { formatPrice, itemStatusMeta, ITEM_STATUS_LABEL } from '@/lib/format';
 import { Badge, Button, Card, EmptyState, ErrorPanel, Skeleton } from './ui';
 import type { ItemDto, ItemStatus } from '@/shared/types';
 
@@ -37,25 +37,29 @@ export function MyItemsPanel() {
 
   return (
     <Card className="p-4">
-      <div className="mb-3 flex items-center gap-2 text-sm font-black">
-        <Package size={16} className="text-emerald-600" /> 我的发布
-        <span className="ml-auto text-[11px] font-bold text-stone-400">含已归档</span>
+      <div className="mb-3 flex items-center gap-2 text-sm font-medium">
+        <Package size={15} className="text-ink-tertiary" /> 我的发布
+        <span className="ml-auto text-[11px] text-ink-tertiary">含已归档</span>
       </div>
 
       <div className="mb-3 flex flex-wrap gap-1.5">
-        {TABS.map((t) => (
-          <button
-            key={t.key}
-            onClick={() => setTab(t.key)}
-            className={`rounded-full px-2.5 py-1 text-xs font-bold transition ${
-              tab === t.key
-                ? 'bg-stone-900 text-white'
-                : 'bg-stone-100 text-stone-600 hover:bg-stone-200'
-            }`}
-          >
-            {t.label}
-          </button>
-        ))}
+        {TABS.map((t) => {
+          const active = tab === t.key;
+          return (
+            <button
+              key={t.key}
+              onClick={() => setTab(t.key)}
+              aria-pressed={active}
+              className={`h-7 rounded-full border px-2.5 text-xs transition-colors ${
+                active
+                  ? 'border-ink bg-ink text-white'
+                  : 'border-line bg-surface text-ink-secondary hover:border-line-strong hover:text-ink'
+              }`}
+            >
+              {t.label}
+            </button>
+          );
+        })}
       </div>
 
       {isLoading && (
@@ -76,7 +80,7 @@ export function MyItemsPanel() {
 
       {items?.length === 0 && !isLoading && !isError && (
         <EmptyState
-          emoji="📦"
+          icon={<Package size={18} />}
           title={tab === 'ALL' ? '你还没有发布过物品' : `没有${ITEM_STATUS_LABEL[tab]}的物品`}
           hint="发布一件，30 秒的事。"
           action={
@@ -88,32 +92,27 @@ export function MyItemsPanel() {
       )}
 
       {!!items?.length && (
-        <ul className="space-y-1.5">
-          {items.map((i) => (
-            <li key={i.id}>
-              <Link
-                href={`/items/${i.id}`}
-                className="flex items-center gap-2.5 rounded-2xl border border-stone-200/70 bg-white px-3 py-2.5 transition hover:border-emerald-300 hover:bg-emerald-50/40"
-              >
-                <span className="min-w-0 flex-1 truncate text-sm font-black">{i.name}</span>
-                {isFetching && <Loader2 size={13} className="animate-spin text-stone-300" />}
-                <span className="shrink-0 text-xs font-black text-emerald-700">
-                  {formatPrice(i.price, i.tradeType)}
-                </span>
-                <Badge
-                  className={
-                    i.status === 'ARCHIVED'
-                      ? 'bg-stone-200 text-stone-600'
-                      : i.status === 'RESERVED'
-                        ? 'bg-amber-100 text-amber-700'
-                        : 'bg-emerald-100 text-emerald-700'
-                  }
+        <ul className="divide-y divide-line rounded-md border border-line">
+          {items.map((i) => {
+            const status = itemStatusMeta(i.status);
+            return (
+              <li key={i.id}>
+                <Link
+                  href={`/items/${i.id}`}
+                  className="flex items-center gap-3 px-3 py-2.5 transition-colors hover:bg-surface-sunken"
                 >
-                  {ITEM_STATUS_LABEL[i.status]}
-                </Badge>
-              </Link>
-            </li>
-          ))}
+                  <span className="min-w-0 flex-1 truncate text-sm text-ink">{i.name}</span>
+                  {isFetching && (
+                    <Loader2 size={13} className="shrink-0 animate-spin text-ink-tertiary" />
+                  )}
+                  <span className="shrink-0 text-[13px] font-medium text-ink tabular">
+                    {formatPrice(i.price, i.tradeType)}
+                  </span>
+                  <Badge tone={status.tone}>{status.label}</Badge>
+                </Link>
+              </li>
+            );
+          })}
         </ul>
       )}
     </Card>

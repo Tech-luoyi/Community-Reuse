@@ -1,31 +1,85 @@
 'use client';
 
-import { AnimatePresence, motion } from 'framer-motion';
-import { Bot, Loader2, Send, Sparkles, TrendingUp, Wand2 } from 'lucide-react';
+import {
+  Bot,
+  Loader2,
+  Send,
+  Sparkles,
+  TrendingUp,
+  Wand2,
+  Wrench,
+  Zap,
+  WifiOff,
+} from 'lucide-react';
 import { useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { post } from '@/lib/api';
-import { Badge, Button, Textarea } from './ui';
+import { cn } from '@/lib/utils';
+import { Badge, Button, Input, Textarea } from './ui';
 import { messageBoardKey } from './MessageBoard';
-import type { FaqResult, PolishResult, PricingResult, TradeType } from '@/shared/types';
+import type { FaqResult, PolishResult, PricingResult } from '@/shared/types';
 
-function MetaLine({
-  r,
-}: {
-  r: { degraded: boolean; source: string; usedTools: boolean; toolCalls: number };
-}) {
+interface Meta {
+  degraded: boolean;
+  source: string;
+  usedTools: boolean;
+  toolCalls: number;
+}
+
+/**
+ * AI 溯源行。
+ *
+ * 上一版是 `📴 离线建议` / `⚡ 缓存命中` / `🤖 模型生成` 三个 emoji 加 badge，
+ * 每次调用返回的内容都在视觉上"跳一下"。改成图标 + 固定色调：
+ * 离线 = 弱化，缓存 = 中性，模型 = AI 紫。
+ */
+function MetaLine({ r }: { r: Meta }) {
+  const state = r.degraded
+    ? { label: '离线建议', tone: 'done' as const, Icon: WifiOff }
+    : r.source === 'cache'
+      ? { label: '缓存命中', tone: 'info' as const, Icon: Zap }
+      : { label: '模型生成', tone: 'ai' as const, Icon: Bot };
+
   return (
-    <div className="flex flex-wrap items-center gap-1.5 text-[11px] font-bold">
-      <Badge
-        className={r.degraded ? 'bg-stone-200 text-stone-600' : 'bg-emerald-100 text-emerald-700'}
-      >
-        {r.degraded ? '📴 离线建议' : r.source === 'cache' ? '⚡ 缓存命中' : '🤖 模型生成'}
+    <div className="flex flex-wrap items-center gap-1.5">
+      <Badge tone={state.tone}>
+        <state.Icon size={11} />
+        {state.label}
       </Badge>
       {r.usedTools && (
-        <Badge className="bg-violet-100 text-violet-700">🔧 查了本小区成交 · ×{r.toolCalls}</Badge>
+        <Badge tone="neutral">
+          <Wrench size={11} />
+          查了本小区成交 ×{r.toolCalls}
+        </Badge>
       )}
     </div>
+  );
+}
+
+/** 三个助手共用的外框。AI 区域统一用紫色描边，与主流程的近黑按钮视觉分离。 */
+function AssistantFrame({
+  icon: Icon,
+  title,
+  aside,
+  children,
+}: {
+  icon: typeof Bot;
+  title: string;
+  aside?: React.ReactNode;
+  children: React.ReactNode;
+}) {
+  return (
+    <section className="rounded-lg border border-ai-line bg-surface p-4">
+      <div className="flex items-center gap-2">
+        <span className="grid size-7 shrink-0 place-items-center rounded-md bg-ai-bg text-ai">
+          <Icon size={15} />
+        </span>
+        <h3 className="text-sm font-medium text-ink">{title}</h3>
+        {aside && <span className="ml-auto">{aside}</span>}
+      </div>
+      <div className="mt-3">{children}</div>
+    </section>
   );
 }
 
@@ -52,65 +106,52 @@ export function PricingAssistant({ onApply }: { onApply?: (r: PricingResult) => 
   }
 
   return (
-    <div className="rounded-3xl border border-emerald-200/70 bg-gradient-to-b from-emerald-50/80 to-white p-4">
-      <div className="flex items-center gap-2 text-sm font-black">
-        <span className="grid h-8 w-8 place-items-center rounded-xl bg-gradient-to-br from-emerald-500 to-teal-500 text-white">
-          <TrendingUp size={16} />
-        </span>
-        AI 智能定价
-        <span className="ml-auto rounded-full bg-emerald-500 px-2 py-0.5 text-[10px] font-black text-white">
-          工具调用版
-        </span>
-      </div>
-      <div className="mt-3 grid gap-2">
-        <input
+    <AssistantFrame
+      icon={TrendingUp}
+      title="智能定价"
+      aside={<span className="text-[11px] text-ink-tertiary">参考同小区成交</span>}
+    >
+      <div className="grid gap-2">
+        <Input
           value={name}
           onChange={(e) => setName(e.target.value)}
           placeholder="物品名称，如 九成新婴儿车"
-          className="h-10 rounded-xl border border-stone-200 bg-white px-3 text-sm outline-none focus:border-emerald-400 focus:ring-4 focus:ring-emerald-100"
         />
-        <input
+        <Input
           value={desc}
           onChange={(e) => setDesc(e.target.value)}
           placeholder="补充描述（可选）：品牌、成色…"
-          className="h-10 rounded-xl border border-stone-200 bg-white px-3 text-sm outline-none focus:border-emerald-400 focus:ring-4 focus:ring-emerald-100"
         />
-        <Button variant="accent" size="sm" onClick={run} disabled={loading}>
-          {loading ? <Loader2 size={15} className="animate-spin" /> : <Sparkles size={15} />}
+        <Button variant="ai" size="sm" onClick={run} disabled={loading}>
+          {loading ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
           {loading ? '正在查本小区成交…' : '获取定价建议'}
         </Button>
       </div>
-      <AnimatePresence>
-        {result && (
-          <motion.div
-            initial={{ opacity: 0, y: 12, scale: 0.98 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0 }}
-            className="mt-3 space-y-2 rounded-2xl bg-white p-3 shadow-sm"
-          >
-            <MetaLine r={result} />
-            <div className="text-lg font-black">
-              {result.mode === 'FREE'
-                ? '🎁 建议免费送'
-                : `💰 ¥${result.priceRange?.min} – ¥${result.priceRange?.max}`}
-            </div>
-            <p className="text-xs leading-relaxed text-stone-500">{result.reason}</p>
-            {onApply && result.mode === 'PRICED' && result.priceRange && (
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => {
-                  onApply(result);
-                  toast.success('已填入价格 ✨');
-                }}
-              >
-                采用建议价 ¥{Math.round((result.priceRange.min + result.priceRange.max) / 2)}
-              </Button>
-            )}
-          </motion.div>
-        )}
-      </AnimatePresence>
-    </div>
+
+      {result && (
+        <div className="mt-3 space-y-2 border-t border-line pt-3">
+          <MetaLine r={result} />
+          <p className="text-lg font-semibold tracking-[-0.01em] text-ink tabular">
+            {result.mode === 'FREE'
+              ? '建议免费送出'
+              : `¥${result.priceRange?.min} – ¥${result.priceRange?.max}`}
+          </p>
+          <p className="text-[13px] leading-relaxed text-ink-secondary">{result.reason}</p>
+          {onApply && result.mode === 'PRICED' && result.priceRange && (
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={() => {
+                onApply(result);
+                toast.success('已填入价格');
+              }}
+            >
+              采用 ¥{Math.round((result.priceRange.min + result.priceRange.max) / 2)}
+            </Button>
+          )}
+        </div>
+      )}
+    </AssistantFrame>
   );
 }
 
@@ -133,66 +174,54 @@ export function PolishAssistant({ onApply }: { onApply?: (r: PolishResult) => vo
   }
 
   return (
-    <div className="rounded-3xl border border-orange-200/70 bg-gradient-to-b from-orange-50/80 to-white p-4">
-      <div className="flex items-center gap-2 text-sm font-black">
-        <span className="grid h-8 w-8 place-items-center rounded-xl bg-gradient-to-br from-orange-500 to-amber-500 text-white">
-          <Wand2 size={16} />
-        </span>
-        AI 文案润色
-      </div>
-      <div className="mt-3 grid gap-2">
+    <AssistantFrame icon={Wand2} title="文案润色">
+      <div className="grid gap-2">
         <Textarea
           value={raw}
           onChange={(e) => setRaw(e.target.value)}
           placeholder="随便写几句，如：车子还能用，轮子好…"
           rows={2}
         />
-        <Button variant="warm" size="sm" onClick={run} disabled={loading}>
-          {loading ? <Loader2 size={15} className="animate-spin" /> : <Wand2 size={15} />}
+        <Button variant="ai" size="sm" onClick={run} disabled={loading}>
+          {loading ? <Loader2 size={14} className="animate-spin" /> : <Wand2 size={14} />}
           {loading ? '正在润色…' : '一键润色'}
         </Button>
       </div>
-      <AnimatePresence>
-        {result && (
-          <motion.div
-            initial={{ opacity: 0, y: 12 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0 }}
-            className="mt-3 space-y-2 rounded-2xl bg-white p-3 shadow-sm"
-          >
-            <MetaLine r={result} />
-            <div className="font-black">{result.title}</div>
-            <p className="text-xs leading-relaxed text-stone-600">{result.description}</p>
-            <div className="flex flex-wrap gap-1">
-              {result.highlights.map((h) => (
-                <span
-                  key={h}
-                  className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-bold text-amber-800"
-                >
-                  ✦ {h}
-                </span>
-              ))}
-            </div>
-            {onApply && (
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => {
-                  onApply(result);
-                  toast.success('已填入表单 ✨');
-                }}
+
+      {result && (
+        <div className="mt-3 space-y-2 border-t border-line pt-3">
+          <MetaLine r={result} />
+          <p className="text-sm font-medium text-ink">{result.title}</p>
+          <p className="text-[13px] leading-relaxed text-ink-secondary">{result.description}</p>
+          <div className="flex flex-wrap gap-1">
+            {result.highlights.map((h) => (
+              <span
+                key={h}
+                className="rounded-full border border-line bg-surface-sunken px-2 py-0.5 text-[11px] text-ink-secondary"
               >
-                采用这版文案
-              </Button>
-            )}
-          </motion.div>
-        )}
-      </AnimatePresence>
-    </div>
+                {h}
+              </span>
+            ))}
+          </div>
+          {onApply && (
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={() => {
+                onApply(result);
+                toast.success('已填入表单');
+              }}
+            >
+              采用这版文案
+            </Button>
+          )}
+        </div>
+      )}
+    </AssistantFrame>
   );
 }
 
-export function FaqAssistant({ itemId, tradeType }: { itemId: string; tradeType: TradeType }) {
+export function FaqAssistant({ itemId }: { itemId: string }) {
   const qc = useQueryClient();
   const [q, setQ] = useState('还在吗？');
   const [loading, setLoading] = useState(false);
@@ -220,7 +249,7 @@ export function FaqAssistant({ itemId, tradeType }: { itemId: string; tradeType:
       // 若按默认 USER 投递，机器生成的回复会被读成发布者本人的话。
       await post(`/api/items/${itemId}/messages`, { content: result.answer, senderType: 'AI' });
       await qc.invalidateQueries({ queryKey: messageBoardKey(itemId) });
-      toast.success('已发送到留言板 🤖');
+      toast.success('已发送到留言板');
       setResult(null);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : '发送失败');
@@ -230,65 +259,48 @@ export function FaqAssistant({ itemId, tradeType }: { itemId: string; tradeType:
   }
 
   return (
-    <div className="rounded-3xl border border-violet-200/70 bg-gradient-to-b from-violet-50/80 to-white p-4">
-      <div className="flex items-center gap-2 text-sm font-black">
-        <span className="grid h-8 w-8 place-items-center rounded-xl bg-gradient-to-br from-violet-500 to-fuchsia-500 text-white">
-          <Bot size={16} />
-        </span>
-        AI FAQ 自动回复
-        <span className="ml-auto text-[11px] font-bold text-stone-400">交易方式: {tradeType}</span>
-      </div>
-      <div className="mt-3 flex flex-wrap gap-1.5">
+    <AssistantFrame
+      icon={Bot}
+      title="FAQ 自动回复"
+      aside={<span className="text-[11px] text-ink-tertiary">发布者使用</span>}
+    >
+      <div className="flex flex-wrap gap-1.5">
         {['还在吗？', '能否自提？', '能刀吗？', '几成新？'].map((s) => (
           <button
             key={s}
             onClick={() => setQ(s)}
-            className={`rounded-full px-2.5 py-1 text-xs font-bold transition ${q === s ? 'bg-violet-600 text-white' : 'bg-stone-100 text-stone-600 hover:bg-stone-200'}`}
+            aria-pressed={q === s}
+            className={cn(
+              'h-7 rounded-full border px-2.5 text-xs transition-colors',
+              q === s
+                ? 'border-ai bg-ai-bg text-ai'
+                : 'border-line bg-surface text-ink-secondary hover:border-line-strong hover:text-ink',
+            )}
           >
             {s}
           </button>
         ))}
       </div>
+
       <div className="mt-2 flex gap-2">
-        <input
-          value={q}
-          onChange={(e) => setQ(e.target.value)}
-          className="h-10 flex-1 rounded-xl border border-stone-200 bg-white px-3 text-sm outline-none focus:border-violet-400 focus:ring-4 focus:ring-violet-100"
-        />
-        <Button
-          size="sm"
-          onClick={run}
-          disabled={loading}
-          className="bg-violet-600 hover:bg-violet-700"
-        >
-          {loading ? <Loader2 size={15} className="animate-spin" /> : '生成'}
+        <Input value={q} onChange={(e) => setQ(e.target.value)} className="flex-1" />
+        <Button variant="ai" size="sm" onClick={run} disabled={loading}>
+          {loading ? <Loader2 size={14} className="animate-spin" /> : '生成'}
         </Button>
       </div>
-      <AnimatePresence>
-        {result && (
-          <motion.div
-            initial={{ opacity: 0, y: 12 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0 }}
-            className="mt-3 rounded-2xl bg-white p-3 shadow-sm"
-          >
-            <MetaLine r={result} />
-            <p className="mt-1.5 text-sm font-bold leading-relaxed">“{result.answer}”</p>
-            <p className="text-[11px] text-stone-400">
-              置信度 {(result.confidence * 100).toFixed(0)}%
-            </p>
-            <Button
-              size="sm"
-              variant="outline"
-              className="mt-2"
-              onClick={sendToBoard}
-              disabled={sending}
-            >
-              <Send size={13} /> {sending ? '发送中…' : '一键发进留言板'}
-            </Button>
-          </motion.div>
-        )}
-      </AnimatePresence>
-    </div>
+
+      {result && (
+        <div className="mt-3 space-y-1.5 border-t border-line pt-3">
+          <MetaLine r={result} />
+          <p className="text-[13px] leading-relaxed text-ink">“{result.answer}”</p>
+          <p className="text-[11px] text-ink-tertiary tabular">
+            置信度 {(result.confidence * 100).toFixed(0)}%
+          </p>
+          <Button size="sm" variant="secondary" onClick={sendToBoard} disabled={sending}>
+            <Send size={13} /> {sending ? '发送中…' : '发进留言板'}
+          </Button>
+        </div>
+      )}
+    </AssistantFrame>
   );
 }

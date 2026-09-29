@@ -1,6 +1,6 @@
 'use client';
 
-import { Bot, Loader2, Send } from 'lucide-react';
+import { Bot, Loader2, MessageSquare, Send } from 'lucide-react';
 import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
@@ -66,45 +66,46 @@ export function MessageBoard({ itemId }: { itemId: string }) {
 
       {messages?.length === 0 && !isLoading && !isError && (
         <EmptyState
-          emoji="💬"
+          icon={<MessageSquare size={18} />}
           title="还没有人提问"
           hint="把「还在吗」「几成新」问在这里，下一个人就不用再私聊一遍。"
         />
       )}
 
       {!!messages?.length && (
-        <ul className="space-y-2.5">
-          {messages.map((m) => (
-            <li key={m.id} className="flex gap-2.5">
-              {m.senderType === 'AI' ? (
-                <span className="grid size-8 shrink-0 place-items-center rounded-full bg-gradient-to-br from-violet-500 to-fuchsia-500 text-white">
-                  <Bot size={15} />
-                </span>
-              ) : (
-                <span className="grid size-8 shrink-0 place-items-center rounded-full bg-stone-900 text-[11px] font-black text-white">
-                  {(m.author?.nickname ?? '?').slice(0, 1)}
-                </span>
-              )}
-              <div className="min-w-0 flex-1 rounded-2xl bg-stone-50 px-3.5 py-2.5">
-                <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px]">
-                  <span className="font-black text-stone-700">
-                    {m.senderType === 'AI' ? '发布者代发' : (m.author?.nickname ?? '未知')}
+        <ul className="space-y-3">
+          {messages.map((m) => {
+            const isAi = m.senderType === 'AI';
+            return (
+              <li key={m.id} className="flex gap-2.5">
+                {isAi ? (
+                  <span className="grid size-7 shrink-0 place-items-center rounded-full bg-ai-bg text-ai">
+                    <Bot size={14} />
                   </span>
-                  {m.senderType === 'AI' && (
-                    <Badge className="bg-violet-100 text-violet-700">AI 建议</Badge>
-                  )}
-                  <span className="text-stone-400">{formatDateTime(m.createdAt)}</span>
+                ) : (
+                  <span className="grid size-7 shrink-0 place-items-center rounded-full bg-surface-sunken text-[11px] font-medium text-ink-secondary">
+                    {(m.author?.nickname ?? '?').slice(0, 1)}
+                  </span>
+                )}
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px]">
+                    <span className="font-medium text-ink">
+                      {isAi ? '发布者代发' : (m.author?.nickname ?? '未知')}
+                    </span>
+                    {isAi && <Badge tone="ai">AI 建议</Badge>}
+                    <span className="text-ink-tertiary tabular">{formatDateTime(m.createdAt)}</span>
+                  </div>
+                  <p className="mt-1 whitespace-pre-wrap text-[13px] leading-relaxed text-ink-secondary">
+                    {m.content}
+                  </p>
                 </div>
-                <p className="mt-1 whitespace-pre-wrap text-sm leading-relaxed text-stone-600">
-                  {m.content}
-                </p>
-              </div>
-            </li>
-          ))}
+              </li>
+            );
+          })}
         </ul>
       )}
 
-      <div className="space-y-2 border-t border-dashed border-stone-200 pt-3">
+      <div className="space-y-2 border-t border-line pt-3">
         <Textarea
           value={draft}
           maxLength={MESSAGE_CONTENT_MAX}
@@ -113,7 +114,7 @@ export function MessageBoard({ itemId }: { itemId: string }) {
           onChange={(e) => setDraft(e.target.value)}
         />
         <div className="flex items-center justify-between">
-          <span className="text-[11px] text-stone-400">公开可见 · 同社区居民都能读到</span>
+          <span className="text-[11px] text-ink-tertiary">公开可见 · 同社区居民都能读到</span>
           <Button size="sm" onClick={submit} disabled={sending || !draft.trim()}>
             {sending ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
             发送

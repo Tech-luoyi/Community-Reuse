@@ -2,106 +2,148 @@
 /* shadcn 基础组件（src/components/ui/**）依赖的 enter/exit 动画工具类（animate-in / fade-in / zoom-in…）。 */
 @import 'tw-animate-css';
 
+/*
+ * 设计基底（v2 全量重做）
+ * ---------------------------------------------------------------------------
+ * 上一版的问题不是"配色不好看"，而是**层级不存在**：满屏 font-black、
+ * 每块都有圆角和阴影、7 种色相互相抢注意力、深色块与浅色块随机分布，
+ * 于是所有元素都在喊，结果没有一句能被听清。emoji 当图标用则让界面
+ * 看起来像模板而不是产品。
+ *
+ * 这一版的取舍：
+ * 1. **单一强调色**。主按钮走近黑（--color-ink），绿色只留给"可领取 /
+ *    环保 / 成功"这类**语义**场景，不再拿来做大面积填充。
+ * 2. **靠留白和 1px 边框建立层次**，不靠阴影堆叠。卡片默认无阴影。
+ * 3. **字重只用 400/500/600**。层级由字号、颜色、间距承担，不用 font-black。
+ * 4. **圆角收敛到一套刻度**（6/8/10/12/16），胶囊只留给状态与筛选。
+ * 5. **不用渐变**（按钮、卡片边框、占位图都取消）。
+ */
+
+/* 中性色刻度：canvas 是页面底，surface 是卡片面，line 是唯一的边界手段。 */
 @theme {
   --font-sans:
-    'Inter', ui-sans-serif, system-ui, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei',
-    sans-serif;
-  --font-heading: var(--font-sans);
+    ui-sans-serif, system-ui, -apple-system, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB',
+    'Microsoft YaHei', sans-serif;
+  --font-mono: ui-monospace, 'SF Mono', 'Cascadia Mono', 'JetBrains Mono', Menlo, monospace;
 
-  --color-cream-50: #fffdf7;
-  --color-cream-100: #fef9ec;
-  --color-ink-900: #1c1917;
-  --color-leaf-500: #16a34a;
-  --color-leaf-600: #15803d;
+  /* 中性刻度 */
+  --color-canvas: #fafafa;
+  --color-surface: #ffffff;
+  --color-surface-sunken: #f5f5f5;
+  --color-line: #e5e5e5;
+  --color-line-strong: #d4d4d4;
+
+  /* 文字 */
+  --color-ink: #171717;
+  --color-ink-secondary: #525252;
+  --color-ink-tertiary: #8a8a8a;
+
+  /*
+   * 语义色。每个状态 = 一个前景 + 一个极浅底，成对使用。
+   * 这些色**只**用于状态标识（Badge、状态点、状态文字），
+   * 不用于大面积填充 —— 填充用 --color-ink。
+   */
+  --color-available: #047857; /* emerald-700，可领取 / 成功 */
+  --color-available-bg: #ecfdf5;
+  --color-available-line: #a7f3d0;
+
+  --color-reserved: #4338ca; /* indigo-700，已预约 */
+  --color-reserved-bg: #eef2ff;
+  --color-reserved-line: #c7d2fe;
+
+  --color-info: #1d4ed8; /* blue-700，新上架 */
+  --color-info-bg: #eff6ff;
+  --color-info-line: #bfdbfe;
+
+  --color-pending: #b45309; /* amber-700，待处理 / 重点提醒 */
+  --color-pending-bg: #fffbeb;
+  --color-pending-line: #fde68a;
+
+  --color-danger: #b91c1c; /* red-700，拒绝 / 危险操作 */
+  --color-danger-bg: #fef2f2;
+  --color-danger-line: #fecaca;
+
+  --color-ai: #6d28d9; /* violet-700，AI 建议 */
+  --color-ai-bg: #f5f3ff;
+  --color-ai-line: #ddd6fe;
+
+  --color-neutral-status: #525252; /* 已完成 */
+  --color-neutral-status-bg: #f5f5f5;
+  --color-archived: #a3a3a3; /* 已归档 */
+
+  /* 圆角刻度 */
+  --radius-xs: 4px;
+  --radius-sm: 6px;
+  --radius: 8px;
+  --radius-md: 10px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
 
   /* ------------------------------------------------------------------------
    * shadcn 语义 token（src/components/ui/** 使用）。
-   * 取值对齐 docs/frontend-design-system.md §3：primary=社区绿、accent=暖琥珀、
-   * destructive=危险红、border/input 同色。语义名是 shadcn 组件的通用契约，
-   * 业务页面仍优先用 ui.tsx 的 stone/emerald 体系。
+   * 映射到上面的中性刻度，保证 shadcn 组件和业务页面同一套视觉。
    * ---------------------------------------------------------------------- */
-  --color-background: #f7f7f2;
-  --color-foreground: #17211c;
-  --color-card: #ffffff;
-  --color-card-foreground: #17211c;
-  --color-popover: #ffffff;
-  --color-popover-foreground: #17211c;
-  --color-primary: #10b981;
+  --color-background: var(--color-canvas);
+  --color-foreground: var(--color-ink);
+  --color-card: var(--color-surface);
+  --color-card-foreground: var(--color-ink);
+  --color-popover: var(--color-surface);
+  --color-popover-foreground: var(--color-ink);
+  --color-primary: var(--color-ink);
   --color-primary-foreground: #ffffff;
-  --color-secondary: #f1f3f1;
-  --color-secondary-foreground: #17211c;
-  --color-muted: #f1f3f1;
-  --color-muted-foreground: #667085;
-  --color-accent: #f59e0b;
-  --color-accent-foreground: #ffffff;
-  --color-destructive: #ef4444;
+  --color-secondary: var(--color-surface-sunken);
+  --color-secondary-foreground: var(--color-ink);
+  --color-muted: var(--color-surface-sunken);
+  --color-muted-foreground: var(--color-ink-secondary);
+  --color-accent: var(--color-surface-sunken);
+  --color-accent-foreground: var(--color-ink);
+  --color-destructive: var(--color-danger);
   --color-destructive-foreground: #ffffff;
-  --color-border: #e7ece9;
-  --color-input: #e7ece9;
-  --color-ring: #10b981;
-
-  --radius: 1rem;
-  --radius-md: 0.75rem;
-
-  --animate-float-slow: float 9s ease-in-out infinite;
-  --animate-marquee: marquee 28s linear infinite;
-  --animate-shimmer: shimmer 2.2s linear infinite;
-
-  @keyframes float {
-    0%,
-    100% {
-      transform: translateY(0px);
-    }
-    50% {
-      transform: translateY(-16px);
-    }
-  }
-  @keyframes marquee {
-    from {
-      transform: translateX(0);
-    }
-    to {
-      transform: translateX(-50%);
-    }
-  }
-  @keyframes shimmer {
-    from {
-      background-position: -200% 0;
-    }
-    to {
-      background-position: 200% 0;
-    }
-  }
+  --color-border: var(--color-line);
+  --color-input: var(--color-line);
+  --color-ring: var(--color-ink);
 }
 
 html {
   scroll-behavior: smooth;
+  /* 顶部 sticky 顶栏 56px + 一点呼吸位，软导航落点不被遮住 */
+  scroll-padding-top: 5rem;
 }
 
 body {
-  background: var(--color-cream-50);
-  color: var(--color-ink-900);
+  background: var(--color-canvas);
+  color: var(--color-ink);
   font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  /* 数字统一等宽，表格/价格/计数不会因字形宽度跳动 */
+  font-variant-numeric: tabular-nums;
   overflow-x: hidden;
 }
 
-/* ambient gradient blobs behind every page */
-.ambient-bg {
-  position: fixed;
-  inset: 0;
-  z-index: -2;
-  overflow: hidden;
-  background:
-    radial-gradient(42rem 26rem at 8% -6%, rgba(22, 163, 74, 0.14), transparent 60%),
-    radial-gradient(36rem 24rem at 95% 8%, rgba(249, 115, 22, 0.14), transparent 60%),
-    radial-gradient(30rem 30rem at 50% 110%, rgba(59, 130, 246, 0.12), transparent 60%),
-    var(--color-cream-50);
+::selection {
+  background: var(--color-ink);
+  color: #fff;
 }
 
-::selection {
-  background: #16a34a;
-  color: #fff;
+/* 焦点环统一：键盘可见、鼠标不打扰。 */
+:where(a, button, input, textarea, select, [tabindex]):focus-visible {
+  outline: 2px solid var(--color-ink);
+  outline-offset: 2px;
+  border-radius: var(--radius-xs);
+}
+
+/* 数字/代号用等宽，便于比对 id、门牌、金额。 */
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+/* 细滚动条：默认样式在浅底上过于抢眼。 */
+@supports (scrollbar-width: thin) {
+  html {
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-line-strong) transparent;
+  }
 }
 
 .no-scrollbar::-webkit-scrollbar {
@@ -114,7 +156,7 @@ body {
 
 /*
  * 无障碍与性能兜底：系统层面要求减少动效时，一律关掉过渡与无限动画。
- * 同时也能压住下面这类装饰性动画在低端设备上的开销。
+ * 同时也能压住装饰性动画在低端设备上的开销。
  */
 @media (prefers-reduced-motion: reduce) {
   *,

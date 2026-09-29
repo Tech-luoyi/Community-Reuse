@@ -1,8 +1,7 @@
 'use client';
 
 import { useRouter } from 'next/navigation';
-import { motion } from 'framer-motion';
-import { KeyRound, Loader2, PartyPopper, UserRound } from 'lucide-react';
+import { KeyRound, Loader2 } from 'lucide-react';
 import { useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -10,7 +9,9 @@ import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
 import { JoinRequestSchema, type JoinRequest } from '@/shared/schemas';
 import { post } from '@/lib/api';
-import { Button, Card, Input } from '@/components/ui';
+import { Button, Card, Field, Input } from '@/components/ui';
+
+const SEED_CODES = ['LINFENG-2026', 'YUNQI-2026'];
 
 export default function JoinPage() {
   const router = useRouter();
@@ -31,9 +32,7 @@ export default function JoinPage() {
     try {
       const data = await post<{ community: { name: string } }>('/api/auth/join', values);
       await qc.invalidateQueries({ queryKey: ['me'] });
-      toast.success(
-        `欢迎加入 ${(data as unknown as { community: { name: string } }).community.name} 🎉`,
-      );
+      toast.success(`欢迎加入 ${data.community.name}`);
       router.push('/');
       router.refresh();
     } catch (e) {
@@ -44,88 +43,48 @@ export default function JoinPage() {
   }
 
   return (
-    <div className="mx-auto max-w-lg pt-6">
-      <motion.div
-        initial={{ opacity: 0, y: 24, scale: 0.98 }}
-        animate={{ opacity: 1, y: 0, scale: 1 }}
-        transition={{ duration: 0.5, ease: [0.22, 1, 0.36, 1] }}
-      >
-        <Card className="relative overflow-hidden p-7">
-          <div className="relative">
-            <div className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-3 py-1 text-xs font-black text-emerald-700">
-              <PartyPopper size={13} /> 30 秒加入 · 熟人社区
-            </div>
-            <h1 className="mt-3 text-3xl font-black tracking-tight">
-              凭邀请码<span className="text-emerald-600">加入小区</span>
-            </h1>
-            <p className="mt-1.5 text-sm text-stone-500">
-              邀请码即身份：校验 → 建用户 → 签发 HttpOnly 会话 Cookie。
-            </p>
+    <div className="mx-auto max-w-sm py-8">
+      <Card className="p-6">
+        <h1 className="text-xl font-semibold tracking-[-0.01em] text-ink">加入小区</h1>
+        <p className="mt-1.5 text-[13px] leading-relaxed text-ink-secondary">
+          邀请码即身份。校验通过后签发 HttpOnly 会话 Cookie。
+        </p>
 
-            <form onSubmit={handleSubmit(onSubmit)} className="mt-5 space-y-3.5">
-              <div>
-                <label className="mb-1.5 flex items-center gap-1.5 text-[13px] font-bold">
-                  <KeyRound size={14} className="text-emerald-600" /> 邀请码
-                </label>
-                <Input placeholder="如 LINFENG-2026" {...register('inviteCode')} />
-                {errors.inviteCode && (
-                  <p className="mt-1 text-xs font-bold text-red-500">{errors.inviteCode.message}</p>
-                )}
-                <div className="mt-2 flex flex-wrap gap-1.5">
-                  {['LINFENG-2026', 'YUNQI-2026'].map((c) => (
-                    <button
-                      key={c}
-                      type="button"
-                      onClick={() => setValue('inviteCode', c)}
-                      className="rounded-full bg-stone-100 px-2.5 py-1 font-mono text-[11px] font-bold text-stone-600 transition hover:bg-stone-900 hover:text-white"
-                    >
-                      {c}
-                    </button>
-                  ))}
-                  <span className="py-1 text-[11px] text-stone-400">
-                    ← 点一下自动填（种子数据）
-                  </span>
-                </div>
-              </div>
-              <div>
-                <label className="mb-1.5 flex items-center gap-1.5 text-[13px] font-bold">
-                  <UserRound size={14} className="text-emerald-600" /> 昵称
-                </label>
-                <Input placeholder="如 3栋-老王" maxLength={30} {...register('nickname')} />
-                {errors.nickname && (
-                  <p className="mt-1 text-xs font-bold text-red-500">{errors.nickname.message}</p>
-                )}
-              </div>
-              <Button
-                type="submit"
-                variant="accent"
-                size="lg"
-                className="w-full"
-                disabled={loading}
-              >
-                {loading && <Loader2 size={17} className="animate-spin" />}
-                {loading ? '正在加入…' : '加入并开始流转 →'}
-              </Button>
-            </form>
-
-            <div className="mt-5 grid grid-cols-3 gap-2 text-center">
-              {[
-                ['🔑', '邀请码准入'],
-                ['🍪', 'Cookie 会话'],
-                ['🏘️', '多租户隔离'],
-              ].map(([e, t]) => (
-                <div
-                  key={t}
-                  className="rounded-2xl bg-stone-50 px-2 py-2.5 text-[11px] font-bold text-stone-500"
+        <form onSubmit={handleSubmit(onSubmit)} className="mt-6 space-y-4">
+          <Field label="邀请码" required error={errors.inviteCode?.message}>
+            <Input
+              placeholder="如 LINFENG-2026"
+              className="font-mono"
+              {...register('inviteCode')}
+            />
+            <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+              {SEED_CODES.map((c) => (
+                <button
+                  key={c}
+                  type="button"
+                  onClick={() => setValue('inviteCode', c)}
+                  className="rounded-md border border-line bg-surface px-1.5 py-0.5 font-mono text-[11px] text-ink-secondary transition-colors hover:border-line-strong hover:text-ink"
                 >
-                  <div className="text-lg">{e}</div>
-                  {t}
-                </div>
+                  {c}
+                </button>
               ))}
             </div>
-          </div>
-        </Card>
-      </motion.div>
+          </Field>
+
+          <Field label="昵称" required error={errors.nickname?.message}>
+            <Input placeholder="如 3栋-老王" maxLength={30} {...register('nickname')} />
+          </Field>
+
+          <Button type="submit" size="lg" className="w-full" disabled={loading}>
+            {loading ? <Loader2 size={15} className="animate-spin" /> : <KeyRound size={15} />}
+            {loading ? '正在加入…' : '加入'}
+          </Button>
+        </form>
+
+        <p className="mt-5 border-t border-line pt-4 text-[11px] leading-relaxed text-ink-tertiary">
+          加入后物品流按小区隔离，只看得到本社区的闲置。
+        </p>
+      </Card>
     </div>
   );
 }

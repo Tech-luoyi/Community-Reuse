@@ -1,5 +1,6 @@
 'use client';
 
+import { Heart } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import { get } from '@/lib/api';
 import { EmptyState, ErrorPanel, SectionTitle, Skeleton } from '@/components/ui';
@@ -19,21 +20,17 @@ export default function FavoritesPage() {
   });
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-5">
       <SectionTitle
         kicker="收藏夹"
-        title={
-          <>
-            我的<span className="text-rose-500">心动好物</span>
-          </>
-        }
-        desc="点过 ❤️ 的都在这里；被别人抢先也没关系，继续找下一个。"
+        title="我收藏的"
+        desc="在物品详情页点收藏后会出现在这里；被别人抢先也没关系，继续找下一个。"
       />
 
       {isLoading && (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {[0, 1, 2].map((i) => (
-            <Skeleton key={i} className="h-72" />
+            <Skeleton key={i} className="aspect-[3/4] w-full" />
           ))}
         </div>
       )}
@@ -48,7 +45,11 @@ export default function FavoritesPage() {
       )}
 
       {items?.length === 0 && !isLoading && !isError && (
-        <EmptyState emoji="💌" title="收藏夹还是空的" hint="在物品详情页点 ❤️ 就会出现在这里。" />
+        <EmptyState
+          icon={<Heart size={18} />}
+          title="收藏夹还是空的"
+          hint="在物品详情页点收藏就会出现在这里。"
+        />
       )}
 
       {!!items?.length && (

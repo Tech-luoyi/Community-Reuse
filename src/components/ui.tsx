@@ -1,28 +1,43 @@
-import { cn } from '@/lib/utils';
-import { RefreshCw } from 'lucide-react';
+import { AlertCircle, RefreshCw } from 'lucide-react';
 import { cva, type VariantProps } from 'class-variance-authority';
 import React from 'react';
+import { cn } from '@/lib/utils';
+
+/**
+ * 基础样式层（v2）
+ * ---------------------------------------------------------------------------
+ * 几条贯穿全站的规则，改动前先确认没有破坏它们：
+ *
+ * - **主按钮是近黑，不是绿色**。绿色留给"可领取 / 成功"这类语义标识。
+ *   大面积绿色填充是最典型的"AI 味"来源 —— 它让每个按钮都在抢注意力。
+ * - **字重只有 400 / 500 / 600**。层级由字号、颜色、留白承担。
+ * - **默认无阴影**，靠 1px 边框和留白分层。阴影只留给浮层（Sheet / Dialog）。
+ * - **无渐变**。渐变按钮和渐变边框是同一类问题：装饰压过信息。
+ */
 
 const buttonVariants = cva(
-  'inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-2xl text-sm font-semibold transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 disabled:pointer-events-none disabled:opacity-50 active:scale-[.97] cursor-pointer select-none',
+  // focus 环交给 globals.css 的 :focus-visible 统一处理，这里只留键盘/鼠标行为差异
+  'inline-flex shrink-0 cursor-pointer items-center justify-center gap-1.5 whitespace-nowrap rounded-md text-sm font-medium transition-colors duration-150 select-none disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0',
   {
     variants: {
       variant: {
-        primary:
-          'bg-stone-900 text-white shadow-[0_8px_24px_rgba(28,25,23,.25)] hover:bg-emerald-600 hover:shadow-[0_8px_28px_rgba(22,163,74,.45)] hover:-translate-y-px',
-        accent:
-          'bg-gradient-to-r from-emerald-500 to-lime-500 text-white shadow-[0_8px_24px_rgba(22,163,74,.4)] hover:brightness-110 hover:-translate-y-px',
-        warm: 'bg-gradient-to-r from-orange-500 to-amber-400 text-white shadow-[0_8px_24px_rgba(249,115,22,.4)] hover:brightness-110 hover:-translate-y-px',
-        outline:
-          'border border-stone-200 bg-white hover:border-emerald-400 hover:text-emerald-700 hover:-translate-y-px',
-        ghost: 'hover:bg-stone-100 text-stone-600 hover:text-stone-900',
-        danger: 'bg-red-500 text-white shadow hover:bg-red-600',
+        /** 主操作。近黑实心，页面上每屏至多一个。 */
+        primary: 'bg-ink text-white hover:bg-ink/88 active:bg-ink',
+        /** 次操作。白底描边。 */
+        secondary: 'border border-line bg-surface text-ink hover:bg-surface-sunken',
+        /** 弱操作。无背景，悬停才出现底色。 */
+        ghost: 'text-ink-secondary hover:bg-surface-sunken hover:text-ink',
+        /** 危险操作。红只在这里出现。 */
+        danger: 'bg-danger text-white hover:bg-danger/90',
+        /** AI 相关操作。紫色描边 + 极浅底，和主流程视觉分离。 */
+        ai: 'border border-ai-line bg-ai-bg text-ai hover:bg-ai-bg/70',
       },
       size: {
-        sm: 'h-8 px-3 text-xs rounded-xl',
-        md: 'h-10 px-4',
-        lg: 'h-12 px-6 text-base rounded-2xl',
-        icon: 'h-10 w-10 rounded-2xl',
+        sm: 'h-8 rounded-sm px-2.5 text-xs [&_svg:not([class*=size-])]:size-3.5',
+        md: 'h-9 px-3.5 [&_svg:not([class*=size-])]:size-4',
+        lg: 'h-11 px-5 [&_svg:not([class*=size-])]:size-4',
+        icon: 'size-9 [&_svg:not([class*=size-])]:size-4',
+        'icon-sm': 'size-8 rounded-sm [&_svg:not([class*=size-])]:size-4',
       },
     },
     defaultVariants: { variant: 'primary', size: 'md' },
@@ -37,44 +52,95 @@ export function Button({ className, variant, size, ...props }: ButtonProps) {
 }
 
 /**
- * 全站基础容器。原先是 `bg-white/85 backdrop-blur-xl`：
- * 一个页面里往往有 4~6 个 Card 同时存在，每个都是一层实时模糊。
- * 改成不透明白底 + 轻投影，观感一致但不再逐帧重算。
+ * 基础容器。
+ *
+ * 刻意保持"白底 + 1px 边框 + 零阴影"：一层背景色差就能把卡片从画布上分开，
+ * 阴影会让同屏多卡片时页面发灰发脏。需要强调的容器用 `ring-1` 或换底色，
+ * 不要加阴影。
  */
 export function Card({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) {
+  return <div className={cn('rounded-lg border border-line bg-surface', className)} {...props} />;
+}
+
+const badgeVariants = cva(
+  'inline-flex h-5 shrink-0 items-center gap-1 rounded-full border px-2 text-[11px] font-medium whitespace-nowrap [&_svg]:size-3',
+  {
+    variants: {
+      /**
+       * tone 与 globals.css 的语义色一一对应。
+       * 状态色只在这里出现 —— 页面里不要再手写 `bg-amber-100 text-amber-800`，
+       * 那正是上一版状态色到处不一致的来源。
+       */
+      tone: {
+        available: 'border-available-line bg-available-bg text-available',
+        reserved: 'border-reserved-line bg-reserved-bg text-reserved',
+        info: 'border-info-line bg-info-bg text-info',
+        pending: 'border-pending-line bg-pending-bg text-pending',
+        danger: 'border-danger-line bg-danger-bg text-danger',
+        done: 'border-line bg-surface-sunken text-ink-secondary',
+        archived: 'border-line bg-surface-sunken text-archived',
+        ai: 'border-ai-line bg-ai-bg text-ai',
+        neutral: 'border-line bg-transparent text-ink-secondary',
+      },
+    },
+    defaultVariants: { tone: 'neutral' },
+  },
+);
+
+export interface BadgeProps
+  extends React.HTMLAttributes<HTMLSpanElement>, VariantProps<typeof badgeVariants> {}
+
+/** 状态色调名。业务代码用它把领域状态映射到统一色板。 */
+export type BadgeTone = NonNullable<VariantProps<typeof badgeVariants>['tone']>;
+
+export function Badge({ className, tone, ...props }: BadgeProps) {
+  return <span className={cn(badgeVariants({ tone }), className)} {...props} />;
+}
+
+/** 字段容器：label + 控件 + 说明/错误，页面里所有表单行都用它保证间距一致。 */
+export function Field({
+  label,
+  hint,
+  error,
+  required,
+  children,
+  className,
+}: {
+  label: string;
+  hint?: string;
+  error?: string;
+  required?: boolean;
+  children: React.ReactNode;
+  className?: string;
+}) {
   return (
-    <div
-      className={cn(
-        'rounded-3xl border border-stone-200/70 bg-white shadow-[0_1px_3px_rgba(28,25,23,.06)]',
-        className,
-      )}
-      {...props}
-    />
+    <div className={cn('space-y-1.5', className)}>
+      <label className="flex items-baseline gap-1 text-[13px] font-medium text-ink">
+        {label}
+        {required && (
+          <span className="text-danger" aria-hidden>
+            *
+          </span>
+        )}
+      </label>
+      {children}
+      {error ? (
+        <p className="flex items-start gap-1 text-xs text-danger">
+          <AlertCircle size={12} className="mt-0.5 shrink-0" />
+          {error}
+        </p>
+      ) : hint ? (
+        <p className="text-xs text-ink-tertiary">{hint}</p>
+      ) : null}
+    </div>
   );
 }
 
-export function Badge({ className, ...props }: React.HTMLAttributes<HTMLSpanElement>) {
-  return (
-    <span
-      className={cn(
-        'inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-bold tracking-wide',
-        className,
-      )}
-      {...props}
-    />
-  );
-}
+const controlClass =
+  'w-full rounded-md border border-line bg-surface text-sm text-ink transition-colors placeholder:text-ink-tertiary disabled:cursor-not-allowed disabled:bg-surface-sunken disabled:text-ink-tertiary';
 
 export function Input({ className, ...props }: React.InputHTMLAttributes<HTMLInputElement>) {
-  return (
-    <input
-      className={cn(
-        'h-11 w-full rounded-2xl border border-stone-200 bg-white px-4 text-sm outline-none transition-all placeholder:text-stone-400 focus:border-emerald-400 focus:ring-4 focus:ring-emerald-100',
-        className,
-      )}
-      {...props}
-    />
-  );
+  return <input className={cn(controlClass, 'h-9 px-3', className)} {...props} />;
 }
 
 export function Textarea({
@@ -82,65 +148,75 @@ export function Textarea({
   ...props
 }: React.TextareaHTMLAttributes<HTMLTextAreaElement>) {
   return (
-    <textarea
-      className={cn(
-        'w-full rounded-2xl border border-stone-200 bg-white px-4 py-3 text-sm outline-none transition-all placeholder:text-stone-400 focus:border-emerald-400 focus:ring-4 focus:ring-emerald-100 min-h-[96px] resize-y',
-        className,
-      )}
-      {...props}
-    />
+    <textarea className={cn(controlClass, 'min-h-24 resize-y px-3 py-2', className)} {...props} />
   );
 }
 
 export function Skeleton({ className }: { className?: string }) {
-  return (
-    <div
-      className={cn(
-        'animate-pulse rounded-2xl bg-gradient-to-r from-stone-100 via-stone-200 to-stone-100 bg-[length:200%_100%]',
-        className,
-      )}
-    />
-  );
+  return <div className={cn('animate-pulse rounded-md bg-surface-sunken', className)} />;
 }
 
+/**
+ * 空态。
+ *
+ * `icon` 传 ReactNode（lucide 图标），不再收 emoji 字符串 ——
+ * emoji 在同一屏里大小、光泽、基线都不可控，是"模板感"的主要来源。
+ * 不传图标时只留文字，避免为填空而堆装饰。
+ */
 export function EmptyState({
-  emoji,
+  icon,
   title,
   hint,
   action,
 }: {
-  emoji: string;
+  icon?: React.ReactNode;
   title: string;
   hint?: string;
   action?: React.ReactNode;
 }) {
   return (
-    <div className="flex flex-col items-center justify-center gap-2 rounded-3xl border border-dashed border-stone-300 bg-white/60 px-6 py-14 text-center">
-      <div className="text-5xl">{emoji}</div>
-      <div className="text-base font-bold">{title}</div>
-      {hint && <div className="max-w-sm text-sm text-stone-500">{hint}</div>}
+    <div className="flex flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-line px-6 py-14 text-center">
+      {icon && (
+        <span className="mb-1 grid size-10 place-items-center rounded-full bg-surface-sunken text-ink-tertiary">
+          {icon}
+        </span>
+      )}
+      <p className="text-sm font-medium text-ink">{title}</p>
+      {hint && <p className="max-w-sm text-[13px] leading-relaxed text-ink-secondary">{hint}</p>}
       {action && <div className="mt-3">{action}</div>}
     </div>
   );
 }
 
+/**
+ * 区块标题。
+ *
+ * kicker 是"这一块在讲什么"的短标签，用小号字 + 弱化色 + 字距，
+ * 而不是深色药丸 —— 深色块会把读者的视线从内容拉到标签上。
+ */
 export function SectionTitle({
   kicker,
   title,
   desc,
+  action,
 }: {
-  kicker: string;
+  kicker?: string;
   title: React.ReactNode;
   desc?: string;
+  action?: React.ReactNode;
 }) {
   return (
-    <div className="space-y-2">
-      <div className="inline-flex items-center gap-1.5 rounded-full bg-stone-900 px-3 py-1 text-[11px] font-bold uppercase tracking-[0.14em] text-lime-300">
-        <span className="h-1.5 w-1.5 rounded-full bg-lime-400" />
-        {kicker}
+    <div className="flex flex-wrap items-end justify-between gap-3">
+      <div className="space-y-1">
+        {kicker && (
+          <div className="text-[11px] font-medium tracking-[0.08em] text-ink-tertiary uppercase">
+            {kicker}
+          </div>
+        )}
+        <h2 className="text-lg font-semibold tracking-[-0.01em] text-ink">{title}</h2>
+        {desc && <p className="max-w-xl text-[13px] leading-relaxed text-ink-secondary">{desc}</p>}
       </div>
-      <h2 className="text-2xl font-black tracking-tight sm:text-3xl">{title}</h2>
-      {desc && <p className="max-w-xl text-sm leading-relaxed text-stone-500">{desc}</p>}
+      {action}
     </div>
   );
 }
@@ -164,14 +240,40 @@ export function ErrorPanel({
   fetching?: boolean;
 }) {
   return (
-    <div className="rounded-2xl border border-dashed border-rose-200 bg-rose-50/60 p-4 text-sm">
-      <div className="font-black text-rose-700">{title}</div>
-      <p className="mt-1 leading-relaxed text-rose-600/90">{hint}</p>
+    <div className="rounded-lg border border-danger-line bg-danger-bg px-4 py-3 text-[13px]">
+      <div className="flex items-center gap-1.5 font-medium text-danger">
+        <AlertCircle size={14} className="shrink-0" />
+        {title}
+      </div>
+      <p className="mt-1 leading-relaxed text-danger/85">{hint}</p>
       {onRetry && (
-        <Button size="sm" variant="outline" className="mt-2" onClick={onRetry}>
+        <Button size="sm" variant="secondary" className="mt-2.5" onClick={onRetry}>
           <RefreshCw size={13} className={fetching ? 'animate-spin' : undefined} /> 重试
         </Button>
       )}
+    </div>
+  );
+}
+
+/** 分隔线。默认很淡，只有确实需要断开视觉时才用。 */
+export function Divider({ className }: { className?: string }) {
+  return <div className={cn('h-px w-full bg-line', className)} />;
+}
+
+/** 一组"标签 — 数值"的紧凑指标。替代上一版带 emoji 的深色小卡。 */
+export function Stat({
+  label,
+  value,
+  className,
+}: {
+  label: string;
+  value: React.ReactNode;
+  className?: string;
+}) {
+  return (
+    <div className={cn('space-y-0.5', className)}>
+      <div className="text-xl font-semibold tracking-[-0.01em] text-ink tabular">{value}</div>
+      <div className="text-xs text-ink-tertiary">{label}</div>
     </div>
   );
 }
