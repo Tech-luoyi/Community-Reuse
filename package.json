@@ -30,6 +30,9 @@
   },
   "dependencies": {
     "@hookform/resolvers": "^5.9.1",
+    "@langchain/langgraph": "^1.4.18",
+    "@langchain/langgraph-checkpoint-postgres": "^1.0.5",
+    "@langchain/openai": "^1.6.0",
     "@prisma/client": "^5.22.0",
     "@tanstack/react-query": "^5.104.0",
     "autoprefixer": "^10.6.1",
