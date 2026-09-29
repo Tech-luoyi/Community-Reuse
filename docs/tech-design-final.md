@@ -780,27 +780,50 @@ CREATE TABLE "ItemEmbedding" (
   "communityId" TEXT        NOT NULL,          -- 冗余但必需：检索按它过滤（§6.5.6 第 6 条）
   "embedding"   vector(1536) NOT NULL,
   "contentHash" TEXT        NOT NULL,          -- 幂等：文本未变则不重算
-  "updatedAt"   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  "createdAt"   TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  "updatedAt"   TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
   CONSTRAINT "ItemEmbedding_itemId_fkey" FOREIGN KEY ("itemId")
-    REFERENCES "Item"("id") ON DELETE CASCADE
+    REFERENCES "Item"("id") ON DELETE CASCADE ON UPDATE CASCADE
 );
 CREATE INDEX ON "ItemEmbedding" USING hnsw ("embedding" vector_cosine_ops);
 CREATE INDEX ON "ItemEmbedding" ("communityId");
 ```
 
-> `ItemEmbedding` 含 `@default(now())` ⇒ 按 §4.3② / §6.7.1 P5 的**写路径硬约束**，其写入**必须经 Prisma Client，不得 raw INSERT**。
+> ⚠️ **本表是全仓唯一必须 raw SQL 写入的含时间戳表**，§4.3② / §6.7.1 P5 在这里**无法照字面执行**：
+> pgvector 的 `vector` 在 Prisma 只能声明为 `Unsupported("vector(1536)")`，客户端**读不到也写不进**
+> 该列（初稿那句"其写入必须经 Prisma Client，不得 raw INSERT"是做不到的，实测已推翻）。
+> 替代纪律写在 `src/server/ai/index-pipeline.ts` 头注里：① 该模块是唯一写入口；② raw UPSERT 里
+> 显式 `"updatedAt" = now()`；③ 社区指纹已纳入本表 `(count, max("updatedAt"))`，所以"有没有推进"
+> 可被单测证伪；④ 冗余 `communityId` 不接受调用方传入，由该模块按 `itemId` 从 `Item` 读真值。
 
-**pgvector 的获取方式（实测后修正，别照初稿做）**：初稿写「换 `pgvector/pgvector:pg16` 镜像」——**这条路在本机不可行**。实测：Docker Hub 被 DNS 污染（`registry-1.docker.io` 解析到 `157.240.11.40` 后 i/o timeout），两个国内加速源在 25 分钟内 **0 层完成**。
+**冗余社区列为何没有 DB 约束（实测后修正）**：初稿给它写了一条跨表 CHECK
+`CHECK ("communityId" = (SELECT ... FROM "Item" ...))`——**PostgreSQL 不允许 CHECK 带子查询**，
+`migrate deploy` 实测报 `SQLSTATE 0A000: cannot use subquery in check constraint`。
+唯一声明式替代（外键指向 `(id, communityId)` 复合唯一键）要在**热表 `Item`** 上加一条数据上完全
+冗余的 `UNIQUE`，并在本表再加一条 `@@unique` 才能满足 Prisma 的复合 1:1 表达——两条空索引只为
+约束表达买单，不划算。改从两端让分叉**无从发生**：读端 `retrieve.ts` 的 CTE 同时带
+`e."communityId" = ?` 与 `i."communityId" = ?`（写坏也漏不放行），写端只从 `Item` 取真值
+（根本没机会写坏）。两端行为都由 `tests/integration/retrieve-tenant.test.ts` 守住，
+含一条"手工 UPDATE 造出分叉、检索仍不返回他人社区物品"的显式用例。
 
-可行的替代是 `docker/db.Dockerfile`：以**本地已有**的 `postgres:16-alpine` 为基镜像，从 GitHub 拉 pgvector 源码编译。可行性依据（全部实测，非推测）：
+**pgvector 的获取方式（两次实测后修正，别照初稿做）**：初稿写「换 `pgvector/pgvector:pg16` 镜像」——**这条路在本机不可行**。实测：Docker Hub 被 DNS 污染（`registry-1.docker.io` 解析到 `157.240.11.40` 后 i/o timeout），两个国内加速源在 25 分钟内 **0 层完成**。
 
-- GitHub `codeload` 1.9s 返回 200；
-- Alpine CDN 可达（`apk update` 列出 28650 个包）；
-- 官方镜像自带 `pg_config` 与 `/usr/local/include/postgresql/server` 头文件——它的 PG 本就是源码编译的，因此**不需要**额外 `-dev` 包。
+第二稿改成「本地基镜像 + GitHub 源码编译」，也**不通**：`apk add build-base` 卡住 59 分钟无进展（不是慢，是 build-base 依赖图里某个包拉不动）。
 
-Dockerfile 末尾有一条**构建期自检**：`vector.control` 必须落在 PG16 的 extension 目录，否则构建直接失败，不留「看起来成功了但是哑的」镜像。
+✅ 最终可行的是 `docker/db.Dockerfile`：以**本地已有**的 `postgres:16-alpine` 为基镜像，取 **Alpine v3.20 归档仓库**里预编译好的 `postgresql-pgvector-0.6.2-r0.apk`，校验 sha256 后把产物按 `pg_config` 的实际目录安放（`--pkglibdir` / `--sharedir`，不硬编码路径）。构建 **10 秒**完成，全程不碰 registry、不装编译器。依据（全部实测）：
 
-> ⚠️ **一条死路，别再走**：Alpine 仓库里的 `postgresql-pgvector` 包是给 **Alpine 自己的 PostgreSQL 18** 编译的，装到 `/usr/share/postgresql18/extension/`，与本镜像的 PG16（`/usr/local/`）**版本与路径双重不匹配**，`CREATE EXTENSION` 依旧报 `not available`。我踩过一次，白等了一轮 4 分钟的 apk 安装。
+- v3.20 的 `APKINDEX` 显示该包 `D: postgresql16`，产物是 `usr/lib/postgresql16/vector.so`；
+- PG server 模块的 ABI **按大版本**走 ⇒ 0.6.2 的二进制能装载在官方镜像源码编译出的 **16.15** 上；
+- Alpine CDN 秒级可达（`apk update` 列出 28650 个包）；
+- 实测 `CREATE EXTENSION vector` 成功、`<=>` 可用、`CREATE INDEX ... USING hnsw` 后 `EXPLAIN` 走 `Index Scan using probe_idx`。
+
+Dockerfile 末尾有一条**构建期自检**：`vector.control` **与** `vector.so` 都必须落在 `pg_config` 指向的目录，否则构建直接失败，不留「看起来成功了但是哑的」镜像。
+
+> ⚠️ **一条差点把我带偏的半截结论**：Alpine **v3.24（当前）** 仓库里的 `postgresql-pgvector` 确实是给
+> Alpine 自己的 **PostgreSQL 18** 编译的，装到 `/usr/lib/postgresql18/`，与本镜像的 PG16（`/usr/local/`）
+> 版本与路径双重不匹配，`CREATE EXTENSION` 报 `not available`。我据此一度判定"apk 这条路整体是死的"，
+> 白等了一轮 4 分钟的 apk 安装。**错的不是 apk 路线，是只查了最新那一版仓库**——归档版本里就有 PG16 的构建。
+
 
 **数据卷与 `TZ: UTC`**：PG 大版本不变（16）⇒ 既有 volume 直接可用，无需 dump/restore（动手前仍先 `pg_dump` 一份，见 §6.6.8 U4）。换镜像时 **必须原样保留 `TZ: UTC`**——它是 §4.3② 时钟源不变量的载体，丢了会让含 `DEFAULT CURRENT_TIMESTAMP` 的列随宿主时区漂移，`ageHours` 静默错一个时区、新鲜度标签全线出错。
 
@@ -1160,7 +1183,7 @@ AppShell
 | **T10** | 测试 + 交付物 | `tests/unit/**` `tests/e2e/**` `vitest.config.ts` `playwright.config.ts` `scripts/export-erd.ts` `README.md` `.env.example` | 全部 | P0 | 单测/E2E 通过；`npm run erd` 出图；README 含一键启动+技术栈简介；视频录制完成 |
 | **T12** | **【INC-2】LangGraph 图运行时** | `src/server/ai/graph.ts`(新：`StateGraph` 定义 + §6.6.2 reducer channel + 条件边) `src/server/ai/nodes.ts`(新：`CACHE_LOOKUP/BUILD_PROMPT/AGENT_CALL/TOOL_EXEC/RETRIEVE/PREFETCH/PARSE/VALIDATE/REPAIR/FALLBACK/PERSIST` 各节点，一文件一职责) `src/server/ai/observe.ts`(新：每态结构化日志 + `toolMode`) `src/server/ai/budget.ts`(新：`deadlineAt` / `min(步上限,剩余)` 计算) `src/server/ai/service.ts`(改为 `graph.invoke`) `tests/unit/ai/graph.test.ts`(新) `tests/unit/ai/budget.test.ts`(新) | T08 | **P0** | 节点与条件边**与 §6.6.1 图逐一对应**（含 F6：`tool_calls ∧ 轮次超限 → REPAIR`；F4：**局部摘除单个工具**而非全量去 tools；PREFETCH 分支）；**每态记 `{state,attempt,latencyMs,toolName?,toolMode?,ok}`**；两级预算（**12s / 1.5s / 60s**）生效且 `TOTAL_DEADLINE_MS` **真实被引用**（INC-1 期间它是死常量）；**终止性单测**：模拟「一直非法 JSON」「一直请求工具」「工具一直超时」「一直不调工具」「embed 一直挂」⇒ 有界终止；现有三能力（定价/润色/FAQ）**行为零回归** |
 | **T11a** | **【INC-2·P0】跨租户缓存指纹 + 聚合工具** | `src/server/ai/fingerprint.ts`(新：`communityFingerprint` 廉价聚合) `src/server/ai/cache.ts`(`computeCacheKey` 改 `sha256(variant+input+commFp)`，`outputJson` 内嵌 `variant`/`commFp`) `src/server/ai/tools.ts`(新：`getCommunitySettlementStats` 执行器，**预取与 function-call 共用**) `src/server/ai/prefetch.ts`(新：§6.5.8 保险模式) `tests/unit/ai/fingerprint.test.ts`(新) `tests/unit/ai/tools.test.ts`(新) | T08 | **P0（红线先行）** | **本任务是 T12 的前置而非后置**：定价一旦消费社区语料，缺指纹即静默跨租户泄漏。验收：**①** 工具 schema 无 `communityId`；**②** 伪造 `arguments.communityId` 被 Zod `additionalProperties:false` 剥除；**③** SQL 恒带 `WHERE communityId=<会话>`（**预取路径同断言**）；**④** 改一件归档物品的价 → 指纹变 → **不命中旧缓存**；**⑤** A 社区请求**不得**命中 B 社区缓存条目 |
-| **T11b** | **【INC-2·P1】语义检索** | `prisma/migrations/0003_*`(`CREATE EXTENSION vector` + `ItemEmbedding` + HNSW + `communityId` 索引) `prisma/schema.prisma`(新增 `ItemEmbedding` 模型) `docker/db.Dockerfile`(新：本地源码编译 pgvector，绕开被污染的 Docker Hub) + `.dockerignore`(新：上下文从 1.058GB 降到 KB 级) + `docker-compose.yml`(改用 build，**保留 `TZ: UTC`**) `src/server/ai/embeddings.ts`(新：`EmbeddingProvider` 接口 + OpenAI 兼容实现，env 驱动) `src/server/ai/retrieve.ts`(新：`search_similar_items`，**先过滤后排序**) `src/server/ai/index-pipeline.ts`(新：事务后异步重算 + `contentHash` 幂等) `prisma/embed-backfill.ts` + `npm run db:embed` `tests/integration/retrieve-tenant.test.ts`(新) | T11a, T12 | **P1** | §6.5.6 **第 6、7 条**断言通过：向量 SQL 带社区谓词、且**不得**先全局 top-k 再过滤；A 社区检索结果不出现在 B 社区 prompt 中；`embed()` 挂 ⇒ 局部摘除检索工具、**保留聚合**、仍 `source:'llm' degraded:false`；索引失败**不阻断**发布/归档主流程；`ItemEmbedding` 写路径**经 Prisma Client**（§4.3② P5） |
+| **T11b** | **【INC-2·P1】语义检索** | `prisma/migrations/0003_*`(`CREATE EXTENSION vector` + `ItemEmbedding` + HNSW + `communityId` 索引) `prisma/schema.prisma`(新增 `ItemEmbedding` 模型) `docker/db.Dockerfile`(新：装 Alpine v3.20 归档仓库针对 PG16 预编译的 pgvector apk，绕开被污染的 Docker Hub 与卡死的源码编译) + `.dockerignore`(新：上下文从 1.058GB 降到 KB 级) + `docker-compose.yml`(改用 build，**保留 `TZ: UTC`**) `src/server/ai/embeddings.ts`(新：`EmbeddingProvider` 接口 + OpenAI 兼容实现，env 驱动) `src/server/ai/retrieve.ts`(新：`search_similar_items`，**先过滤后排序**) `src/server/ai/index-pipeline.ts`(新：事务后异步重算 + `contentHash` 幂等) `prisma/embed-backfill.ts` + `npm run db:embed` `tests/integration/retrieve-tenant.test.ts`(新) | T11a, T12 | **P1** | §6.5.6 **第 6、7 条**断言通过：向量 SQL 带社区谓词、且**不得**先全局 top-k 再过滤；A 社区检索结果不出现在 B 社区 prompt 中；`embed()` 挂 ⇒ 局部摘除检索工具、**保留聚合**、仍 `source:'llm' degraded:false`；索引失败**不阻断**发布/归档主流程；`ItemEmbedding` 写路径**只经 `index-pipeline`**（`vector` 是 `Unsupported`，Prisma Client 读写不了该列——§4.3② 在此以四条替代纪律执行，见 §6.5.9） |
 | **T13** | **【INC-2·P1】SSE 过程事件流式** | `src/server/ai/sse.ts`(新：`ReadableStream` 编码) `src/app/api/ai/pricing/route.ts`(按 `Accept` 协商) `src/lib/api.ts`(前端流式读取) `src/components/ai.tsx`(进度态) `tests/integration/ai-sse.test.ts`(新) | T12 | **P1** | 不带 `Accept: text/event-stream` 时**响应与现在逐字节一致**（单测/集成测试走非流式，不引入 SSE 解析）；带时过程事件流 + **末尾唯一一个 `result` 事件承载整包契约**；**R1 验收**：注入「中途 deadline 耗尽」「REPAIR 最终失败」⇒ `result` 仍是完整 `degraded:true` 规则结果，**不出现半截 JSON** |
 | **T14** | **【INC-2·P2】多轮会话记忆** | `src/server/ai/checkpoint.ts`(新：`PostgresSaver` 装配) `src/app/api/ai/pricing/route.ts`(透传 `threadId`) `tests/integration/ai-memory.test.ts`(新) `docs/er-diagram-final.mermaid`(增补 `ItemEmbedding`) | T11b | **P2** | 同 `threadId` 二次请求可引用首轮结论；**记忆按 `(userId, communityId)` 隔离**；checkpoint 表**不在** Prisma 管理下且 `migrate diff` 不产生 DROP（§10 DDL 归属纪律） |
 
@@ -1220,7 +1243,7 @@ graph LR
 >
 > **checkpoint 表 DDL 归属纪律**：`PostgresSaver.setup()` 自建的表**不得**进 Prisma schema，否则 `prisma migrate` 会与框架抢 DDL。做法：在迁移 `0003` 中显式注释声明为「外部管理表」，并在 `tests/unit/data-layer-invariants.test.ts` 增加断言，防止 `prisma migrate diff` 把它们「纠正」成 DROP。
 >
-> **DB 侧 pgvector**：`postgres:16-alpine` **不含**该扩展（实测 `CREATE EXTENSION vector` 报 `extension "vector" is not available`，仅 `pg_trgm` 可用）。因 Docker Hub 在本机被 DNS 污染、加速源 25 分钟 0 层完成，**无法**直接采用现成的 `pgvector/pgvector:pg16`；改为 `docker/db.Dockerfile` 以本地基镜像源码编译（依据与死路记录见 §6.5.9）。**改镜像时必须原样保留 `TZ: UTC`**（§4.3② 时钟源不变量），丢失会导致 `ageHours` 静默偏移一个时区、新鲜度标签全线出错。
+> **DB 侧 pgvector**：`postgres:16-alpine` **不含**该扩展（实测 `CREATE EXTENSION vector` 报 `extension "vector" is not available`，仅 `pg_trgm` 可用）。因 Docker Hub 在本机被 DNS 污染、加速源 25 分钟 0 层完成，**无法**直接采用现成的 `pgvector/pgvector:pg16`；源码编译又被 `apk add build-base` 卡死 59 分钟。最终改为 `docker/db.Dockerfile` 装 **Alpine v3.20 归档仓库**里针对 PG16 预编译的 apk（依据与两条弯路记录见 §6.5.9）。**改镜像时必须原样保留 `TZ: UTC`**（§4.3② 时钟源不变量），丢失会导致 `ageHours` 静默偏移一个时区、新鲜度标签全线出错。
 
 **开发**
 
