@@ -1,7 +1,13 @@
 # 只跑数据库一个容器（与设计一致：MinIO 已砍，图片走本地 StorageAdapter）
 services:
   db:
-    image: postgres:16-alpine
+    # 本地构建而非直接 pull `pgvector/pgvector:pg16`：见 docker/db.Dockerfile 头部的三条实测结论。
+    # `image` + `build` 并存：`compose up` 会构建并打上这个 tag；已配好镜像加速的环境也可
+    # 改成 pull 现成镜像，数据目录格式同为 PG16，volume 不用动。
+    image: community-reuse-db:pg16-pgvector
+    build:
+      context: .
+      dockerfile: docker/db.Dockerfile
     container_name: community-reuse-db
     restart: unless-stopped
     environment:

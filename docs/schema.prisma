@@ -131,6 +131,7 @@ model Item {
   claims    ClaimRequest[]
   favorites Favorite[]
   messages  Message[]
+  embedding ItemEmbedding?
 
   // D2：默认列表主查询 = (communityId, status=ACTIVE, publishedAt DESC)
   // 索引与查询谓词完全匹配（hiddenAt 已随治理模块砍除，不存在残余过滤）
@@ -148,6 +149,28 @@ model ItemImage {
   item      Item   @relation(fields: [itemId], references: [id], onDelete: Cascade)
 
   @@index([itemId, sortOrder])
+}
+
+/// 语义检索语料（docs/tech-design-final.md §6.5.9）。
+/// 一行一件物品；删除物品经 ON DELETE CASCADE 自动清理，不留孤儿向量。
+model ItemEmbedding {
+  itemId      String                       @id
+  /// 冗余自 Item，只作向量扫描的过滤前缀用。它的一致性**不**靠数据库约束（PG 的 CHECK 不能
+  /// 带子查询，实测 0A000），而是靠「写端从 Item 读、读端同时联 Item 过滤」双保险；
+  /// 理由与验证位置写在迁移 0003 的头注里。
+  /// 存在的唯一理由：让向量检索能「先按社区过滤、再按距离排序」（§6.5.6 第 6 条）。
+  communityId String
+  /// pgvector 类型，Prisma 无法读写 —— 对本表的增删查**全部**走 $executeRaw / $queryRaw。
+  /// 维度写死在列宽里：换 embedding 模型 = 一次新迁移 + 全量回填，不做成运行时可变。
+  embedding   Unsupported("vector(1536)")?
+  /// 语料规范化后的哈希；文本未变则跳过重算（§6.5.10 幂等）。
+  contentHash String
+  createdAt   DateTime                     @default(now())
+  updatedAt   DateTime                     @default(now())
+
+  item Item @relation(fields: [itemId], references: [id], onDelete: Cascade)
+
+  @@index([communityId])
 }
 
 model ClaimRequest {

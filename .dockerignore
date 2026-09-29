@@ -1,0 +1,31 @@
+# 构建上下文只服务于 docker/db.Dockerfile，而那个镜像**只需要 Dockerfile 本身**：
+# pgvector 是从 Alpine CDN 取预编译 apk 装的，不 COPY 任何仓库文件。
+#
+# 不加这份文件的后果是实测过的：`Sending build context to Docker daemon 1.058GB`
+# ——node_modules(882MB) + .next + 备份全被打包上传，构建时间几乎全花在传上下文上。
+node_modules
+.next
+out
+build
+dist
+coverage
+
+# 运行时产物与本地数据
+public/uploads/*
+!public/uploads/.gitkeep
+*.log
+*.dump
+.env
+.env.*
+
+# 版本库与编辑器
+.git
+.github
+.vscode
+.idea
+
+# 文档与测试不参与镜像构建
+docs
+tests
+prisma
+src

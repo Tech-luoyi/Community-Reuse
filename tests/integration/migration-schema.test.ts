@@ -1,6 +1,6 @@
 /**
  * 迁移落地验证（真连库）：确认手写迁移 `prisma/migrations/0001_init/migration.sql`
- * 已把 schema.prisma 的 10 表 / 6 枚举 / 2 条 CHECK 约束如实建到 PG。
+ * 已把 schema.prisma 的 11 表 / 6 枚举 / 2 条 CHECK 约束如实建到 PG。
  *
  * 门控：需 `RUN_INTEGRATION=1`；默认 `npm run test` 不加载本文件。
  */
@@ -21,6 +21,7 @@ const EXPECTED_TABLES = [
   'CommunityMember',
   'Favorite',
   'Item',
+  'ItemEmbedding',
   'ItemImage',
   'Message',
   'Notification',
@@ -52,12 +53,12 @@ const EXPECTED_ENUMS = [
   'TradeType',
 ];
 
-describe('迁移落地：结构（10 表 / 6 枚举 / 2 CHECK）', () => {
+describe('迁移落地：结构（11 表 / 6 枚举 / 2 CHECK）', () => {
   afterAll(async () => {
     await closePool();
   });
 
-  it('10 张业务表齐备（除去 _prisma_migrations 与 LangGraph 外部管理表）', async () => {
+  it('11 张业务表齐备（除去 _prisma_migrations 与 LangGraph 外部管理表）', async () => {
     const { rows } = await pool.query<{ table_name: string }>(
       `SELECT table_name
          FROM information_schema.tables

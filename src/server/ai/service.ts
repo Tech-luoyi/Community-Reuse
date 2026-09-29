@@ -28,6 +28,7 @@ import type {
 
 import { type CacheKeyScope, computeCacheKey, getCached, putCached } from '@/server/ai/cache';
 import { getCheckpointer } from '@/server/ai/checkpoint';
+import { getEmbeddingConfig, getEmbeddingProvider } from '@/server/ai/embeddings';
 import { computeCommunityFingerprint, PRICING_CACHE_VARIANT } from '@/server/ai/fingerprint';
 import { fallbackFaq, fallbackPolish, fallbackPricing } from '@/server/ai/fallback';
 import {
@@ -43,6 +44,12 @@ import {
   gatewayModelPort,
   runAgentGraph,
 } from '@/server/ai/graph';
+import {
+  SIMILAR_TOOL_SPEC,
+  SimilarItemsArgsSchema,
+  renderSimilarForPrompt,
+  searchSimilarItems,
+} from '@/server/ai/retrieve';
 import {
   SETTLEMENT_TOOL_SPEC,
   SettlementStatsArgsSchema,
@@ -226,7 +233,9 @@ export async function generatePricing(
 
   // 工具执行器：预取与模型 function-call 共用同一条路径 ⇒ 租户防线只有一处（§6.5.6）。
   const executeTool: ToolExecutor = async (name, rawArgs) => {
-    if (name !== SETTLEMENT_TOOL_SPEC.name) {
+    const isSettlement = name === SETTLEMENT_TOOL_SPEC.name;
+    const isSimilar = name === SIMILAR_TOOL_SPEC.name;
+    if (!isSettlement && !isSimilar) {
       throw new ToolUnavailableError(`未注册的工具：${name}`);
     }
     let json: unknown;
@@ -236,9 +245,22 @@ export async function generatePricing(
       throw new ToolUnavailableError('工具 arguments 不是合法 JSON');
     }
     // `.strict()` 在此剥除模型幻觉出的 communityId 等未知字段。
-    const args = SettlementStatsArgsSchema.parse(json);
-    return renderSettlementForPrompt(await getCommunitySettlementStats(communityId, args));
+    if (isSettlement) {
+      const args = SettlementStatsArgsSchema.parse(json);
+      return renderSettlementForPrompt(await getCommunitySettlementStats(communityId, args));
+    }
+    const provider = getEmbeddingProvider();
+    if (provider === null) {
+      // 只可能来自并发下的配置变化：正常路径下未配置就不会把本工具交给模型。
+      throw new ToolUnavailableError('嵌入服务未配置');
+    }
+    const args = SimilarItemsArgsSchema.parse(json);
+    return renderSimilarForPrompt(await searchSimilarItems(communityId, args, provider));
   };
+
+  // 语义检索只在嵌入**真配了**的时候上桌：否则每轮都白派一个必然失败的工具，
+  // 还多烧一次模型调用（§6.6.4 的延迟预算按轮计）。
+  const similarityEnabled = getEmbeddingConfig() !== null;
 
   const payload = {
     name: input.name,
@@ -253,7 +275,7 @@ export async function generatePricing(
     schema: PricingModelOutputSchema,
     maxTokens: MODEL_MAX_TOKENS.PRICING,
     temperature: MODEL_TEMPERATURE.PRICING,
-    tools: [SETTLEMENT_TOOL_SPEC],
+    tools: similarityEnabled ? [SETTLEMENT_TOOL_SPEC, SIMILAR_TOOL_SPEC] : [SETTLEMENT_TOOL_SPEC],
     executeTool,
     prefetchEnabled: process.env.AI_PRICING_PREFETCH !== '0',
     fallback: () => fallbackPricing(input),
