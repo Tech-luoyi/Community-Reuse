@@ -1,15 +1,47 @@
 @import 'tailwindcss';
+/* shadcn 基础组件（src/components/ui/**）依赖的 enter/exit 动画工具类（animate-in / fade-in / zoom-in…）。 */
+@import 'tw-animate-css';
 
 @theme {
   --font-sans:
     'Inter', ui-sans-serif, system-ui, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei',
     sans-serif;
+  --font-heading: var(--font-sans);
 
   --color-cream-50: #fffdf7;
   --color-cream-100: #fef9ec;
   --color-ink-900: #1c1917;
   --color-leaf-500: #16a34a;
   --color-leaf-600: #15803d;
+
+  /* ------------------------------------------------------------------------
+   * shadcn 语义 token（src/components/ui/** 使用）。
+   * 取值对齐 docs/frontend-design-system.md §3：primary=社区绿、accent=暖琥珀、
+   * destructive=危险红、border/input 同色。语义名是 shadcn 组件的通用契约，
+   * 业务页面仍优先用 ui.tsx 的 stone/emerald 体系。
+   * ---------------------------------------------------------------------- */
+  --color-background: #f7f7f2;
+  --color-foreground: #17211c;
+  --color-card: #ffffff;
+  --color-card-foreground: #17211c;
+  --color-popover: #ffffff;
+  --color-popover-foreground: #17211c;
+  --color-primary: #10b981;
+  --color-primary-foreground: #ffffff;
+  --color-secondary: #f1f3f1;
+  --color-secondary-foreground: #17211c;
+  --color-muted: #f1f3f1;
+  --color-muted-foreground: #667085;
+  --color-accent: #f59e0b;
+  --color-accent-foreground: #ffffff;
+  --color-destructive: #ef4444;
+  --color-destructive-foreground: #ffffff;
+  --color-border: #e7ece9;
+  --color-input: #e7ece9;
+  --color-ring: #10b981;
+
+  --radius: 1rem;
+  --radius-md: 0.75rem;
 
   --animate-float-slow: float 9s ease-in-out infinite;
   --animate-marquee: marquee 28s linear infinite;

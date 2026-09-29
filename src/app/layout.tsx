@@ -2,6 +2,7 @@ import type { Metadata } from 'next';
 import { AmbientBackground } from '@/components/AmbientBackground';
 import { AppShell } from '@/components/AppShell';
 import { Providers } from '@/components/providers';
+import { TooltipProvider } from '@/components/ui/tooltip';
 import './globals.css';
 
 export const metadata: Metadata = {
@@ -13,10 +14,12 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="zh-CN">
       <body>
-        <Providers>
-          <AmbientBackground />
-          <AppShell>{children}</AppShell>
-        </Providers>
+        <TooltipProvider>
+          <Providers>
+            <AmbientBackground />
+            <AppShell>{children}</AppShell>
+          </Providers>
+        </TooltipProvider>
       </body>
     </html>
   );

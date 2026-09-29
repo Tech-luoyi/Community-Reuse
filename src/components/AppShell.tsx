@@ -2,11 +2,30 @@
 
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import { Bell, Compass, Heart, LayoutDashboard, PlusCircle, Recycle, User } from 'lucide-react';
-import { useQuery } from '@tanstack/react-query';
-import { cn } from '@/lib/cn';
-import { get } from '@/lib/api';
+import {
+  Bell,
+  Compass,
+  Heart,
+  LayoutDashboard,
+  LogOut,
+  PlusCircle,
+  Recycle,
+  User,
+} from 'lucide-react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { toast } from 'sonner';
+import { cn } from '@/lib/utils';
+import { get, post } from '@/lib/api';
 import { Button } from './ui';
+import { Avatar, AvatarFallback } from '@/components/ui/avatar';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { useMe } from '@/hooks/use-me';
 import type { NotificationDto } from '@/shared/schemas';
 
@@ -21,7 +40,21 @@ const NAV = [
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
+  const qc = useQueryClient();
   const { data: me } = useMe();
+
+  /** 登出：清 Cookie（幂等）→ 清空查询缓存 → 回首页。失败也不阻断本地登出。 */
+  async function logout() {
+    try {
+      await post('/api/auth/logout');
+    } catch {
+      // 服务端不可达时仍清本地态：会话 Cookie 已随响应过期或将被下次请求拒绝。
+    }
+    qc.clear();
+    toast.success('已退出登录');
+    router.push('/');
+    router.refresh();
+  }
 
   /*
     红点取自 `GET /api/me/notifications?unreadOnly=true`（契约 §6）的真实条数。
@@ -91,15 +124,35 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               )}
             </Link>
             {me ? (
-              <button
-                onClick={() => router.push('/me')}
-                className="flex h-10 items-center gap-2 rounded-2xl bg-stone-900 py-1 pl-1 pr-3 text-sm font-bold text-white shadow transition hover:-translate-y-0.5 hover:bg-emerald-700"
-              >
-                <span className="grid h-8 w-8 place-items-center rounded-xl bg-gradient-to-br from-emerald-400 to-lime-400 text-stone-900">
-                  <User size={16} />
-                </span>
-                <span className="max-w-20 truncate">{me.user.nickname}</span>
-              </button>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <button
+                    className="flex h-10 items-center gap-2 rounded-2xl bg-stone-900 py-1 pl-1 pr-3 text-sm font-bold text-white shadow transition hover:-translate-y-0.5 hover:bg-emerald-700"
+                    aria-label="用户菜单"
+                  >
+                    <Avatar size="sm" className="rounded-xl after:rounded-xl">
+                      <AvatarFallback className="rounded-xl bg-gradient-to-br from-emerald-400 to-lime-400 text-stone-900">
+                        {me.user.nickname.slice(0, 1)}
+                      </AvatarFallback>
+                    </Avatar>
+                    <span className="max-w-20 truncate">{me.user.nickname}</span>
+                  </button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-44">
+                  <DropdownMenuLabel className="truncate">{me.user.nickname}</DropdownMenuLabel>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem onSelect={() => router.push('/me')}>
+                    <User /> 个人中心
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onSelect={() => router.push('/notifications')}>
+                    <Bell /> 我的通知
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem variant="destructive" onSelect={() => void logout()}>
+                    <LogOut /> 退出登录
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
             ) : (
               <Link href="/join">
                 <Button size="md" variant="accent">
