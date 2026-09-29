@@ -188,7 +188,7 @@ describe('我的列表 / 通知 / 看板 / FAQ 归属 / 上传（真连库）', 
     const target = `${fx.scopePrefix}n-1`;
     const first = await readPOST(
       makeRequest('POST', `/api/me/notifications/${target}/read`, { token: ownerToken }),
-      { params: { id: target } },
+      { params: Promise.resolve({ id: target }) },
     );
     expect(first.status).toBe(200);
     const dto = NotificationDtoSchema.parse((await json<DataEnvelope<unknown>>(first)).data);
@@ -197,7 +197,7 @@ describe('我的列表 / 通知 / 看板 / FAQ 归属 / 上传（真连库）', 
 
     const again = await readPOST(
       makeRequest('POST', `/api/me/notifications/${target}/read`, { token: ownerToken }),
-      { params: { id: target } },
+      { params: Promise.resolve({ id: target }) },
     );
     const againDto = NotificationDtoSchema.parse((await json<DataEnvelope<unknown>>(again)).data);
     expect(againDto.readAt).toBe(dto.readAt);
@@ -206,12 +206,12 @@ describe('我的列表 / 通知 / 看板 / FAQ 归属 / 上传（真连库）', 
       makeRequest('POST', `/api/me/notifications/${fx.scopePrefix}n-4/read`, {
         token: ownerToken,
       }),
-      { params: { id: `${fx.scopePrefix}n-4` } },
+      { params: Promise.resolve({ id: `${fx.scopePrefix}n-4` }) },
     );
     expect(foreign.status).toBe(404);
 
     const anon = await readPOST(makeRequest('POST', `/api/me/notifications/${target}/read`), {
-      params: { id: target },
+      params: Promise.resolve({ id: target }),
     });
     expect(anon.status).toBe(401);
   });

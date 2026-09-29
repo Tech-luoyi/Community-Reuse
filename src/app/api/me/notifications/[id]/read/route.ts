@@ -14,7 +14,7 @@ import { markNotificationRead } from '@/server/notifications/service';
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 
-type NotificationRouteContext = { params: Promise<{ id: string }> | { id: string } };
+type NotificationRouteContext = { params: Promise<{ id: string }> };
 
 export const POST = withRoute(
   async (request: Request, context: NotificationRouteContext): Promise<Response> => {

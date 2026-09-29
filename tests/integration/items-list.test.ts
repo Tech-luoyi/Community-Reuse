@@ -274,7 +274,7 @@ describe('物品列表 / 详情（真连库）', () => {
   describe('GET /api/items/:id（详情）', () => {
     it('200：返回 ItemDetailDto，contactText 恒 null，viewer 关系标记正确（OWNER）', async () => {
       const response = await itemGET(makeRequest('GET', `/api/items/${ids.newer}`, { token }), {
-        params: { id: ids.newer },
+        params: Promise.resolve({ id: ids.newer }),
       });
       expect(response.status).toBe(200);
       const json = (await response.json()) as { data: ItemDetailDto };
@@ -294,7 +294,7 @@ describe('物品列表 / 详情（真连库）', () => {
       const detailResponse = await itemGET(
         makeRequest('GET', `/api/items/${ids.older}`, { token }),
         {
-          params: { id: ids.older },
+          params: Promise.resolve({ id: ids.older }),
         },
       );
       const detail = (await detailResponse.json()) as { data: ItemDetailDto };
@@ -307,7 +307,7 @@ describe('物品列表 / 详情（真连库）', () => {
 
     it('详情 price 为 JSON number（闭环 P3）', async () => {
       const response = await itemGET(makeRequest('GET', `/api/items/${ids.priced}`, { token }), {
-        params: { id: ids.priced },
+        params: Promise.resolve({ id: ids.priced }),
       });
       const json = (await response.json()) as { data: ItemDetailDto };
       expect(typeof json.data.price).toBe('number');
@@ -317,7 +317,7 @@ describe('物品列表 / 详情（真连库）', () => {
     it('跨社区详情 → 404（不泄漏存在性：itemB 属乙区，会话在甲区）', async () => {
       const response = await itemGET(
         makeRequest('GET', `/api/items/${ids.crossCommunity}`, { token }),
-        { params: { id: ids.crossCommunity } },
+        { params: Promise.resolve({ id: ids.crossCommunity }) },
       );
       expect(response.status).toBe(404);
       const json = (await response.json()) as { error: { code: string } };
@@ -326,14 +326,14 @@ describe('物品列表 / 详情（真连库）', () => {
 
     it('不存在的物品 → 404', async () => {
       const response = await itemGET(makeRequest('GET', '/api/items/no-such-item', { token }), {
-        params: { id: 'no-such-item' },
+        params: Promise.resolve({ id: 'no-such-item' }),
       });
       expect(response.status).toBe(404);
     });
 
     it('未登录 → 401', async () => {
       const response = await itemGET(makeRequest('GET', `/api/items/${ids.newer}`), {
-        params: { id: ids.newer },
+        params: Promise.resolve({ id: ids.newer }),
       });
       expect(response.status).toBe(401);
     });

@@ -157,7 +157,7 @@ describe('领取申请提交 / 查询 / contactText（真连库）', () => {
           token: dualToken,
           body: { message: '今晚能拿', preferredLocation: '3栋楼下' },
         }),
-        { params: { id: items.submit } },
+        { params: Promise.resolve({ id: items.submit }) },
       );
       expect(response.status).toBe(201);
       const json = (await response.json()) as DataEnvelope<ClaimDto>;
@@ -183,7 +183,7 @@ describe('领取申请提交 / 查询 / contactText（真连库）', () => {
           token: dualToken,
           body: { message: '再来一次' },
         }),
-        { params: { id: items.submit } },
+        { params: Promise.resolve({ id: items.submit }) },
       );
       expect(response.status).toBe(409);
       const json = (await response.json()) as { error: { code: string } };
@@ -196,7 +196,7 @@ describe('领取申请提交 / 查询 / contactText（真连库）', () => {
           token: ownerToken,
           body: { message: '自己申请自己' },
         }),
-        { params: { id: items.submit } },
+        { params: Promise.resolve({ id: items.submit }) },
       );
       expect(response.status).toBe(403);
       const json = (await response.json()) as { error: { code: string } };
@@ -209,7 +209,7 @@ describe('领取申请提交 / 查询 / contactText（真连库）', () => {
           token: dualToken,
           body: { message: '申请已归档物品' },
         }),
-        { params: { id: items.archived } },
+        { params: Promise.resolve({ id: items.archived }) },
       );
       expect(response.status).toBe(409);
       const json = (await response.json()) as { error: { code: string } };
@@ -222,7 +222,7 @@ describe('领取申请提交 / 查询 / contactText（真连库）', () => {
           token: dualToken,
           body: { message: '越界申请' },
         }),
-        { params: { id: items.cross } },
+        { params: Promise.resolve({ id: items.cross }) },
       );
       expect(response.status).toBe(404);
     });
@@ -230,7 +230,7 @@ describe('领取申请提交 / 查询 / contactText（真连库）', () => {
     it('未登录 → 401 UNAUTHENTICATED', async () => {
       const response = await claimPOST(
         makeRequest('POST', `/api/items/${items.submit}/claims`, { body: { message: '匿名' } }),
-        { params: { id: items.submit } },
+        { params: Promise.resolve({ id: items.submit }) },
       );
       expect(response.status).toBe(401);
     });
@@ -241,7 +241,7 @@ describe('领取申请提交 / 查询 / contactText（真连库）', () => {
           token: dualToken,
           body: { message: 'a'.repeat(501) },
         }),
-        { params: { id: items.read } },
+        { params: Promise.resolve({ id: items.read }) },
       );
       expect(response.status).toBe(400);
       const json = (await response.json()) as { error: { code: string } };
@@ -254,7 +254,7 @@ describe('领取申请提交 / 查询 / contactText（真连库）', () => {
           token: dualToken,
           body: { preferredAt: 'not-a-date' },
         }),
-        { params: { id: items.read } },
+        { params: Promise.resolve({ id: items.read }) },
       );
       expect(response.status).toBe(400);
     });
@@ -267,7 +267,7 @@ describe('领取申请提交 / 查询 / contactText（真连库）', () => {
     it('OWNER → 看到该物品全部申请（createdAt DESC）', async () => {
       const response = await itemClaimsGET(
         makeRequest('GET', `/api/items/${items.read}/claims`, { token: ownerToken }),
-        { params: { id: items.read } },
+        { params: Promise.resolve({ id: items.read }) },
       );
       expect(response.status).toBe(200);
       const json = (await response.json()) as DataEnvelope<ClaimDto[]>;
@@ -282,7 +282,7 @@ describe('领取申请提交 / 查询 / contactText（真连库）', () => {
     it('非 owner 的申请人 → 只看自己那条', async () => {
       const response = await itemClaimsGET(
         makeRequest('GET', `/api/items/${items.read}/claims`, { token: dualToken }),
-        { params: { id: items.read } },
+        { params: Promise.resolve({ id: items.read }) },
       );
       expect(response.status).toBe(200);
       const json = (await response.json()) as DataEnvelope<ClaimDto[]>;
@@ -292,7 +292,7 @@ describe('领取申请提交 / 查询 / contactText（真连库）', () => {
     it('第三人（非 owner、无申请）→ 403 FORBIDDEN', async () => {
       const response = await itemClaimsGET(
         makeRequest('GET', `/api/items/${items.read}/claims`, { token: outsiderToken }),
-        { params: { id: items.read } },
+        { params: Promise.resolve({ id: items.read }) },
       );
       expect(response.status).toBe(403);
       const json = (await response.json()) as { error: { code: string } };
@@ -302,7 +302,7 @@ describe('领取申请提交 / 查询 / contactText（真连库）', () => {
     it('跨社区物品 → 404', async () => {
       const response = await itemClaimsGET(
         makeRequest('GET', `/api/items/${items.cross}/claims`, { token: ownerToken }),
-        { params: { id: items.cross } },
+        { params: Promise.resolve({ id: items.cross }) },
       );
       expect(response.status).toBe(404);
     });
@@ -377,7 +377,7 @@ describe('领取申请提交 / 查询 / contactText（真连库）', () => {
     it('PENDING：owner 侧与申请人侧都看不到联系方式（均为 null）', async () => {
       const ownerView = await itemClaimsGET(
         makeRequest('GET', `/api/items/${items.contact}/claims`, { token: ownerToken }),
-        { params: { id: items.contact } },
+        { params: Promise.resolve({ id: items.contact }) },
       );
       const ownerJson = (await ownerView.json()) as DataEnvelope<ClaimDto[]>;
       expect(ownerJson.data.every((c) => c.contactText === null)).toBe(true);
@@ -393,14 +393,14 @@ describe('领取申请提交 / 查询 / contactText（真连库）', () => {
     it('ACCEPTED 后：owner 看到申请人联系方式、申请人看到 owner 联系方式', async () => {
       const accepted = await acceptPOST(
         makeRequest('POST', `/api/claims/${claims.contactDual}/accept`, { token: ownerToken }),
-        { params: { id: claims.contactDual } },
+        { params: Promise.resolve({ id: claims.contactDual }) },
       );
       expect(accepted.status).toBe(200);
 
       // owner 侧
       const ownerView = await itemClaimsGET(
         makeRequest('GET', `/api/items/${items.contact}/claims`, { token: ownerToken }),
-        { params: { id: items.contact } },
+        { params: Promise.resolve({ id: items.contact }) },
       );
       const ownerJson = (await ownerView.json()) as DataEnvelope<ClaimDto[]>;
       const ownerSeen = ownerJson.data.find((c) => c.id === claims.contactDual);

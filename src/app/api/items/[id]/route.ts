@@ -23,7 +23,7 @@ export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 
 /** Next 15 的 `params` 可能是 Promise（运行时）或已解好的对象（直接调用）——两者都兼容。 */
-type ItemRouteContext = { params: Promise<{ id: string }> | { id: string } };
+type ItemRouteContext = { params: Promise<{ id: string }> };
 
 async function resolveItemId(context: ItemRouteContext): Promise<string> {
   const resolved = await context.params;

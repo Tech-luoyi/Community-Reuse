@@ -163,12 +163,12 @@ describe('并发转移的终态一致性不变量（真连库）', () => {
 
       const [acceptRes, cancelRes] = await Promise.all([
         acceptPOST(makeRequest('POST', `/api/claims/${claimId}/accept`, { token: ownerToken }), {
-          params: { id: claimId },
+          params: Promise.resolve({ id: claimId }),
         }),
         cancelPOST(
           makeRequest('POST', `/api/claims/${claimId}/cancel`, { token: applicantToken }),
           {
-            params: { id: claimId },
+            params: Promise.resolve({ id: claimId }),
           },
         ),
       ]);
@@ -203,7 +203,7 @@ describe('并发转移的终态一致性不变量（真连库）', () => {
       // （claim=ACCEPTED、item=RESERVED、reservedAt≠NULL），避免手工构造出与状态机不符的夹具。
       const accepted = await acceptPOST(
         makeRequest('POST', `/api/claims/${claimId}/accept`, { token: ownerToken }),
-        { params: { id: claimId } },
+        { params: Promise.resolve({ id: claimId }) },
       );
       expect(accepted.status).toBe(200);
       expect(await readTerminal(claimId, itemId)).toEqual({
@@ -216,13 +216,13 @@ describe('并发转移的终态一致性不变量（真连库）', () => {
         completePOST(
           makeRequest('POST', `/api/claims/${claimId}/complete`, { token: ownerToken }),
           {
-            params: { id: claimId },
+            params: Promise.resolve({ id: claimId }),
           },
         ),
         cancelPOST(
           makeRequest('POST', `/api/claims/${claimId}/cancel`, { token: applicantToken }),
           {
-            params: { id: claimId },
+            params: Promise.resolve({ id: claimId }),
           },
         ),
       ]);

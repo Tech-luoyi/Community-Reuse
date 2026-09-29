@@ -200,7 +200,7 @@ describe('领取申请状态机（真连库）', () => {
       });
 
       const response = await acceptPOST(claimRequest(claims.multiDual, ownerToken), {
-        params: { id: claims.multiDual },
+        params: Promise.resolve({ id: claims.multiDual }),
       });
       expect(response.status).toBe(200);
       const json = (await response.json()) as DataEnvelope<ClaimDto>;
@@ -231,9 +231,11 @@ describe('领取申请状态机（真连库）', () => {
 
     it('并发：两个 accept 打同一物品 → 恰一个 200、一个 409，最终只有一条 ACCEPTED', async () => {
       const [r1, r2] = await Promise.all([
-        acceptPOST(claimRequest(claims.raceDual, ownerToken), { params: { id: claims.raceDual } }),
+        acceptPOST(claimRequest(claims.raceDual, ownerToken), {
+          params: Promise.resolve({ id: claims.raceDual }),
+        }),
         acceptPOST(claimRequest(claims.raceStranger, ownerToken), {
-          params: { id: claims.raceStranger },
+          params: Promise.resolve({ id: claims.raceStranger }),
         }),
       ]);
       expect([r1.status, r2.status].sort()).toEqual([200, 409]);
@@ -254,13 +256,13 @@ describe('领取申请状态机（真连库）', () => {
   describe('ACCEPTED 之后的释放路径', () => {
     it('accept 后 applicant cancel → 申请 CANCELED 且物品回到 ACTIVE、reservedAt=null', async () => {
       const accepted = await acceptPOST(claimRequest(claims.cancelAcceptedDual, ownerToken), {
-        params: { id: claims.cancelAcceptedDual },
+        params: Promise.resolve({ id: claims.cancelAcceptedDual }),
       });
       expect(accepted.status).toBe(200);
       expect((await readItem(items.cancelAccepted))?.status).toBe('RESERVED');
 
       const cancelled = await cancelPOST(claimRequest(claims.cancelAcceptedDual, dualToken), {
-        params: { id: claims.cancelAcceptedDual },
+        params: Promise.resolve({ id: claims.cancelAcceptedDual }),
       });
       expect(cancelled.status).toBe(200);
       const json = (await cancelled.json()) as DataEnvelope<ClaimDto>;
@@ -273,13 +275,13 @@ describe('领取申请状态机（真连库）', () => {
 
     it('accept 后 owner reject → 申请 REJECTED 且物品回到 ACTIVE、reservedAt=null', async () => {
       const accepted = await acceptPOST(claimRequest(claims.rejectAcceptedDual, ownerToken), {
-        params: { id: claims.rejectAcceptedDual },
+        params: Promise.resolve({ id: claims.rejectAcceptedDual }),
       });
       expect(accepted.status).toBe(200);
       expect((await readItem(items.rejectAccepted))?.status).toBe('RESERVED');
 
       const rejected = await rejectPOST(claimRequest(claims.rejectAcceptedDual, ownerToken), {
-        params: { id: claims.rejectAcceptedDual },
+        params: Promise.resolve({ id: claims.rejectAcceptedDual }),
       });
       expect(rejected.status).toBe(200);
       const json = (await rejected.json()) as DataEnvelope<ClaimDto>;
@@ -297,14 +299,14 @@ describe('领取申请状态机（真连库）', () => {
   describe('complete', () => {
     it('200：申请 COMPLETED+completedAt、物品 ARCHIVED+archivedAt（应用时钟）、申请人收到 CLAIM_COMPLETED', async () => {
       const accepted = await acceptPOST(claimRequest(claims.completeDual, ownerToken), {
-        params: { id: claims.completeDual },
+        params: Promise.resolve({ id: claims.completeDual }),
       });
       expect(accepted.status).toBe(200);
       expect((await readItem(items.complete))?.status).toBe('RESERVED');
 
       const before = Date.now();
       const completed = await completePOST(claimRequest(claims.completeDual, ownerToken), {
-        params: { id: claims.completeDual },
+        params: Promise.resolve({ id: claims.completeDual }),
       });
       expect(completed.status).toBe(200);
       const json = (await completed.json()) as DataEnvelope<ClaimDto>;
@@ -333,7 +335,7 @@ describe('领取申请状态机（真连库）', () => {
   describe('非法转移 → 409 CLAIM_CONFLICT', () => {
     it('PENDING → complete → 409', async () => {
       const response = await completePOST(claimRequest(claims.pendingCompleteDual, ownerToken), {
-        params: { id: claims.pendingCompleteDual },
+        params: Promise.resolve({ id: claims.pendingCompleteDual }),
       });
       expect(response.status).toBe(409);
       const json = (await response.json()) as { error: { code: string } };
@@ -342,26 +344,26 @@ describe('领取申请状态机（真连库）', () => {
 
     it('REJECTED → accept → 409', async () => {
       const rejected = await rejectPOST(claimRequest(claims.rejectedDual, ownerToken), {
-        params: { id: claims.rejectedDual },
+        params: Promise.resolve({ id: claims.rejectedDual }),
       });
       expect(rejected.status).toBe(200);
       expect((await readClaim(claims.rejectedDual))?.status).toBe('REJECTED');
 
       const response = await acceptPOST(claimRequest(claims.rejectedDual, ownerToken), {
-        params: { id: claims.rejectedDual },
+        params: Promise.resolve({ id: claims.rejectedDual }),
       });
       expect(response.status).toBe(409);
     });
 
     it('CANCELED → accept → 409', async () => {
       const cancelled = await cancelPOST(claimRequest(claims.canceledDual, dualToken), {
-        params: { id: claims.canceledDual },
+        params: Promise.resolve({ id: claims.canceledDual }),
       });
       expect(cancelled.status).toBe(200);
       expect((await readClaim(claims.canceledDual))?.status).toBe('CANCELED');
 
       const response = await acceptPOST(claimRequest(claims.canceledDual, ownerToken), {
-        params: { id: claims.canceledDual },
+        params: Promise.resolve({ id: claims.canceledDual }),
       });
       expect(response.status).toBe(409);
     });
@@ -370,30 +372,30 @@ describe('领取申请状态机（真连库）', () => {
       expect(
         (
           await acceptPOST(claimRequest(claims.completedDual, ownerToken), {
-            params: { id: claims.completedDual },
+            params: Promise.resolve({ id: claims.completedDual }),
           })
         ).status,
       ).toBe(200);
       expect(
         (
           await completePOST(claimRequest(claims.completedDual, ownerToken), {
-            params: { id: claims.completedDual },
+            params: Promise.resolve({ id: claims.completedDual }),
           })
         ).status,
       ).toBe(200);
       expect((await readClaim(claims.completedDual))?.status).toBe('COMPLETED');
 
       const acceptAgain = await acceptPOST(claimRequest(claims.completedDual, ownerToken), {
-        params: { id: claims.completedDual },
+        params: Promise.resolve({ id: claims.completedDual }),
       });
       const rejectAgain = await rejectPOST(claimRequest(claims.completedDual, ownerToken), {
-        params: { id: claims.completedDual },
+        params: Promise.resolve({ id: claims.completedDual }),
       });
       const cancelAgain = await cancelPOST(claimRequest(claims.completedDual, dualToken), {
-        params: { id: claims.completedDual },
+        params: Promise.resolve({ id: claims.completedDual }),
       });
       const completeAgain = await completePOST(claimRequest(claims.completedDual, ownerToken), {
-        params: { id: claims.completedDual },
+        params: Promise.resolve({ id: claims.completedDual }),
       });
       expect([
         acceptAgain.status,
@@ -410,20 +412,20 @@ describe('领取申请状态机（真连库）', () => {
   describe('越权与跨租户', () => {
     it('非 owner 调 accept/reject/complete → 403', async () => {
       const acceptRes = await acceptPOST(claimRequest(claims.authzStranger, dualToken), {
-        params: { id: claims.authzStranger },
+        params: Promise.resolve({ id: claims.authzStranger }),
       });
       const rejectRes = await rejectPOST(claimRequest(claims.authzStranger, dualToken), {
-        params: { id: claims.authzStranger },
+        params: Promise.resolve({ id: claims.authzStranger }),
       });
       const completeRes = await completePOST(claimRequest(claims.authzStranger, dualToken), {
-        params: { id: claims.authzStranger },
+        params: Promise.resolve({ id: claims.authzStranger }),
       });
       expect([acceptRes.status, rejectRes.status, completeRes.status]).toEqual([403, 403, 403]);
     });
 
     it('非申请人调 cancel（owner 取消他人申请）→ 403', async () => {
       const response = await cancelPOST(claimRequest(claims.authzStranger, ownerToken), {
-        params: { id: claims.authzStranger },
+        params: Promise.resolve({ id: claims.authzStranger }),
       });
       expect(response.status).toBe(403);
       const json = (await response.json()) as { error: { code: string } };
@@ -432,10 +434,10 @@ describe('领取申请状态机（真连库）', () => {
 
     it('跨社区 claim → 404（甲区会话操作乙区物品的申请）', async () => {
       const acceptRes = await acceptPOST(claimRequest(claims.crossDual, ownerToken), {
-        params: { id: claims.crossDual },
+        params: Promise.resolve({ id: claims.crossDual }),
       });
       const cancelRes = await cancelPOST(claimRequest(claims.crossDual, dualToken), {
-        params: { id: claims.crossDual },
+        params: Promise.resolve({ id: claims.crossDual }),
       });
       expect([acceptRes.status, cancelRes.status]).toEqual([404, 404]);
     });
@@ -444,7 +446,7 @@ describe('领取申请状态机（真连库）', () => {
       const response = await acceptPOST(
         makeRequest('POST', `/api/claims/${claims.authzStranger}`),
         {
-          params: { id: claims.authzStranger },
+          params: Promise.resolve({ id: claims.authzStranger }),
         },
       );
       expect(response.status).toBe(401);

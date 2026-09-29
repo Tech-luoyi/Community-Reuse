@@ -36,7 +36,7 @@ async function fireConcurrentSubmits(itemId: string, token: string): Promise<num
         token,
         body: { message: '并发提交' },
       }),
-      { params: { id: itemId } },
+      { params: Promise.resolve({ id: itemId }) },
     ),
   );
   const responses = await Promise.all(requests);
@@ -122,7 +122,7 @@ describe('并发重复申请竞态（真连库）', () => {
         token: dualToken,
         body: { message: '申请已预约物品' },
       }),
-      { params: { id: reservedItem } },
+      { params: Promise.resolve({ id: reservedItem }) },
     );
     expect(response.status).toBe(409);
     const json = (await response.json()) as { error: { code: string } };
@@ -136,7 +136,7 @@ describe('并发重复申请竞态（真连库）', () => {
         token: dualToken,
         body: { message: '第一次申请' },
       }),
-      { params: { id: reapplyItem } },
+      { params: Promise.resolve({ id: reapplyItem }) },
     );
     expect(first.status).toBe(201);
     const firstJson = (await first.json()) as { data: { id: string } };
@@ -144,7 +144,7 @@ describe('并发重复申请竞态（真连库）', () => {
 
     const rejected = await rejectPOST(
       makeRequest('POST', `/api/claims/${reapplyClaimId}/reject`, { token: ownerToken }),
-      { params: { id: reapplyClaimId } },
+      { params: Promise.resolve({ id: reapplyClaimId }) },
     );
     expect(rejected.status).toBe(200);
     expect(await countPending(reapplyItem, fx.dualId)).toBe(0);
@@ -154,7 +154,7 @@ describe('并发重复申请竞态（真连库）', () => {
         token: dualToken,
         body: { message: '重新申请' },
       }),
-      { params: { id: reapplyItem } },
+      { params: Promise.resolve({ id: reapplyItem }) },
     );
     expect(again.status).toBe(201);
     expect(await countPending(reapplyItem, fx.dualId)).toBe(1);

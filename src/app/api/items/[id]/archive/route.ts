@@ -16,7 +16,7 @@ import { loadItemDto } from '@/server/items/service';
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 
-type ItemRouteContext = { params: Promise<{ id: string }> | { id: string } };
+type ItemRouteContext = { params: Promise<{ id: string }> };
 
 async function resolveItemId(context: ItemRouteContext): Promise<string> {
   const resolved = await context.params;

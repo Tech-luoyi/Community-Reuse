@@ -72,7 +72,7 @@ describe('留言板 + 收藏（真连库）', () => {
   it('GET 空留言 → 200 []', async () => {
     const response = await messagesGET(
       makeRequest('GET', `/api/items/${item}/messages`, { token: dualToken }),
-      { params: { id: item } },
+      { params: Promise.resolve({ id: item }) },
     );
     expect(response.status).toBe(200);
     const body = (await response.json()) as DataEnvelope<unknown[]>;
@@ -85,7 +85,7 @@ describe('留言板 + 收藏（真连库）', () => {
         token: dualToken,
         body: { content: '还在吗？' },
       }),
-      { params: { id: item } },
+      { params: Promise.resolve({ id: item }) },
     );
     expect(first.status).toBe(201);
     const firstBody = (await first.json()) as DataEnvelope<unknown>;
@@ -100,13 +100,13 @@ describe('留言板 + 收藏（真连库）', () => {
         token: ownerToken,
         body: { content: '在的，随时自提' },
       }),
-      { params: { id: item } },
+      { params: Promise.resolve({ id: item }) },
     );
     expect(second.status).toBe(201);
 
     const listResponse = await messagesGET(
       makeRequest('GET', `/api/items/${item}/messages`, { token: dualToken }),
-      { params: { id: item } },
+      { params: Promise.resolve({ id: item }) },
     );
     const list = (await listResponse.json()) as DataEnvelope<unknown[]>;
     const dtos = list.data.map((row) => MessageDtoSchema.parse(row));
@@ -121,7 +121,7 @@ describe('留言板 + 收藏（真连库）', () => {
         token: dualToken,
         body: { content: '支持自提，时间你定', senderType: 'AI' },
       }),
-      { params: { id: item } },
+      { params: Promise.resolve({ id: item }) },
     );
     expect(response.status).toBe(403);
     expect(((await response.json()) as { error: { code: string } }).error.code).toBe('FORBIDDEN');
@@ -133,7 +133,7 @@ describe('留言板 + 收藏（真连库）', () => {
         token: ownerToken,
         body: { content: '价格已很低，诚心要可小刀', senderType: 'AI' },
       }),
-      { params: { id: item } },
+      { params: Promise.resolve({ id: item }) },
     );
     expect(response.status).toBe(201);
     const body = (await response.json()) as DataEnvelope<unknown>;
@@ -157,7 +157,7 @@ describe('留言板 + 收藏（真连库）', () => {
         token: dualToken,
         body: { content: '   ' },
       }),
-      { params: { id: item } },
+      { params: Promise.resolve({ id: item }) },
     );
     expect(response.status).toBe(400);
     const body = (await response.json()) as { error: { code: string; details?: unknown[] } };
@@ -168,12 +168,12 @@ describe('留言板 + 收藏（真连库）', () => {
   it('留言板作用域：跨社区物品 404 / 未登录 401', async () => {
     const cross = await messagesGET(
       makeRequest('GET', `/api/items/${fx.itemBId}/messages`, { token: dualToken }),
-      { params: { id: fx.itemBId } },
+      { params: Promise.resolve({ id: fx.itemBId }) },
     );
     expect(cross.status).toBe(404);
 
     const anon = await messagesGET(makeRequest('GET', `/api/items/${item}/messages`), {
-      params: { id: item },
+      params: Promise.resolve({ id: item }),
     });
     expect(anon.status).toBe(401);
   });
@@ -185,7 +185,7 @@ describe('留言板 + 收藏（真连库）', () => {
   it('POST 收藏 201 → 重复 409 CONFLICT → DELETE 200 → 再删 404', async () => {
     const add = await favoritePOST(
       makeRequest('POST', `/api/items/${item}/favorite`, { token: dualToken }),
-      { params: { id: item } },
+      { params: Promise.resolve({ id: item }) },
     );
     expect(add.status).toBe(201);
     expect(FavoriteResultSchema.parse(((await add.json()) as DataEnvelope<unknown>).data)).toEqual({
@@ -194,14 +194,14 @@ describe('留言板 + 收藏（真连库）', () => {
 
     const dup = await favoritePOST(
       makeRequest('POST', `/api/items/${item}/favorite`, { token: dualToken }),
-      { params: { id: item } },
+      { params: Promise.resolve({ id: item }) },
     );
     expect(dup.status).toBe(409);
     expect(((await dup.json()) as { error: { code: string } }).error.code).toBe('CONFLICT');
 
     const remove = await favoriteDELETE(
       makeRequest('DELETE', `/api/items/${item}/favorite`, { token: dualToken }),
-      { params: { id: item } },
+      { params: Promise.resolve({ id: item }) },
     );
     expect(remove.status).toBe(200);
     expect(
@@ -210,7 +210,7 @@ describe('留言板 + 收藏（真连库）', () => {
 
     const removeAgain = await favoriteDELETE(
       makeRequest('DELETE', `/api/items/${item}/favorite`, { token: dualToken }),
-      { params: { id: item } },
+      { params: Promise.resolve({ id: item }) },
     );
     expect(removeAgain.status).toBe(404);
   });
@@ -218,7 +218,7 @@ describe('留言板 + 收藏（真连库）', () => {
   it('收藏跨社区物品 → 404（不泄漏存在性）', async () => {
     const response = await favoritePOST(
       makeRequest('POST', `/api/items/${fx.itemBId}/favorite`, { token: dualToken }),
-      { params: { id: fx.itemBId } },
+      { params: Promise.resolve({ id: fx.itemBId }) },
     );
     expect(response.status).toBe(404);
   });

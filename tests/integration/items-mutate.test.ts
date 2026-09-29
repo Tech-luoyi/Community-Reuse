@@ -209,7 +209,7 @@ describe('物品发布 / 编辑 / 归档（真连库）', () => {
 
       const detailResponse = await itemGET(
         makeRequest('GET', `/api/items/${created.data.id}`, { token: ownerToken }),
-        { params: { id: created.data.id } },
+        { params: Promise.resolve({ id: created.data.id }) },
       );
       const detail = (await detailResponse.json()) as DataEnvelope<ItemDetailDto>;
       expect(detail.data.coverUrl).toBe('/uploads/a.jpg');
@@ -278,7 +278,7 @@ describe('物品发布 / 编辑 / 归档（真连库）', () => {
           token: ownerToken,
           body: { name: '改名后物品' },
         }),
-        { params: { id: ids.patchOk } },
+        { params: Promise.resolve({ id: ids.patchOk }) },
       );
       expect(response.status).toBe(200);
       const json = (await response.json()) as DataEnvelope<ItemDto>;
@@ -296,7 +296,7 @@ describe('物品发布 / 编辑 / 归档（真连库）', () => {
           token: dualToken,
           body: { name: '越权改名' },
         }),
-        { params: { id: fx.itemAId } },
+        { params: Promise.resolve({ id: fx.itemAId }) },
       );
       expect(response.status).toBe(403);
       const json = (await response.json()) as { error: { code: string } };
@@ -309,7 +309,7 @@ describe('物品发布 / 编辑 / 归档（真连库）', () => {
           token: ownerToken,
           body: { name: '越界改名' },
         }),
-        { params: { id: fx.itemBId } },
+        { params: Promise.resolve({ id: fx.itemBId }) },
       );
       expect(response.status).toBe(404);
     });
@@ -320,7 +320,7 @@ describe('物品发布 / 编辑 / 归档（真连库）', () => {
           token: ownerToken,
           body: { name: '改已归档' },
         }),
-        { params: { id: ids.archivedPatch } },
+        { params: Promise.resolve({ id: ids.archivedPatch }) },
       );
       expect(response.status).toBe(409);
       const json = (await response.json()) as { error: { code: string } };
@@ -333,7 +333,7 @@ describe('物品发布 / 编辑 / 归档（真连库）', () => {
           token: ownerToken,
           body: { tradeType: 'FIXED_PRICE' },
         }),
-        { params: { id: ids.mergeFree } },
+        { params: Promise.resolve({ id: ids.mergeFree }) },
       );
       expect(response.status).toBe(400);
       const json = (await response.json()) as { error: { code: string } };
@@ -346,7 +346,7 @@ describe('物品发布 / 编辑 / 归档（真连库）', () => {
           token: ownerToken,
           body: { tradeType: 'FREE' },
         }),
-        { params: { id: ids.mergeFixed } },
+        { params: Promise.resolve({ id: ids.mergeFixed }) },
       );
       expect(response.status).toBe(200);
       const json = (await response.json()) as DataEnvelope<ItemDto>;
@@ -367,11 +367,11 @@ describe('物品发布 / 编辑 / 归档（真连库）', () => {
           token: ownerToken,
           body: { imageKeys: ['x.jpg', 'y.jpg'] },
         }),
-        { params: { id: ids.patchOk } },
+        { params: Promise.resolve({ id: ids.patchOk }) },
       );
       const first = await itemGET(
         makeRequest('GET', `/api/items/${ids.patchOk}`, { token: ownerToken }),
-        { params: { id: ids.patchOk } },
+        { params: Promise.resolve({ id: ids.patchOk }) },
       );
       const firstDetail = (await first.json()) as DataEnvelope<ItemDetailDto>;
       expect(firstDetail.data.images).toEqual([
@@ -385,11 +385,11 @@ describe('物品发布 / 编辑 / 归档（真连库）', () => {
           token: ownerToken,
           body: { imageKeys: ['z.jpg'] },
         }),
-        { params: { id: ids.patchOk } },
+        { params: Promise.resolve({ id: ids.patchOk }) },
       );
       const second = await itemGET(
         makeRequest('GET', `/api/items/${ids.patchOk}`, { token: ownerToken }),
-        { params: { id: ids.patchOk } },
+        { params: Promise.resolve({ id: ids.patchOk }) },
       );
       const secondDetail = (await second.json()) as DataEnvelope<ItemDetailDto>;
       expect(() => ItemDetailDtoSchema.parse(secondDetail.data)).not.toThrow();
@@ -400,7 +400,7 @@ describe('物品发布 / 编辑 / 归档（真连库）', () => {
     it('未登录 → 401', async () => {
       const response = await itemPATCH(
         makeRequest('PATCH', `/api/items/${ids.patchOk}`, { body: { name: 'x' } }),
-        { params: { id: ids.patchOk } },
+        { params: Promise.resolve({ id: ids.patchOk }) },
       );
       expect(response.status).toBe(401);
     });
@@ -414,7 +414,7 @@ describe('物品发布 / 编辑 / 归档（真连库）', () => {
       const before = Date.now();
       const response = await itemArchivePOST(
         makeRequest('POST', `/api/items/${ids.archOk}/archive`, { token: ownerToken }),
-        { params: { id: ids.archOk } },
+        { params: Promise.resolve({ id: ids.archOk }) },
       );
       expect(response.status).toBe(200);
       const json = (await response.json()) as DataEnvelope<ItemDto>;
@@ -436,7 +436,7 @@ describe('物品发布 / 编辑 / 归档（真连库）', () => {
     it('非 ACTIVE 再次归档 → 409 CLAIM_CONFLICT', async () => {
       const response = await itemArchivePOST(
         makeRequest('POST', `/api/items/${ids.archConflict}/archive`, { token: ownerToken }),
-        { params: { id: ids.archConflict } },
+        { params: Promise.resolve({ id: ids.archConflict }) },
       );
       expect(response.status).toBe(409);
       const json = (await response.json()) as { error: { code: string } };
@@ -446,7 +446,7 @@ describe('物品发布 / 编辑 / 归档（真连库）', () => {
     it('非 owner（同社区成员 dual）→ 403 FORBIDDEN', async () => {
       const response = await itemArchivePOST(
         makeRequest('POST', `/api/items/${ids.archNonOwner}/archive`, { token: dualToken }),
-        { params: { id: ids.archNonOwner } },
+        { params: Promise.resolve({ id: ids.archNonOwner }) },
       );
       expect(response.status).toBe(403);
       const json = (await response.json()) as { error: { code: string } };
@@ -456,7 +456,7 @@ describe('物品发布 / 编辑 / 归档（真连库）', () => {
     it('跨社区 → 404（itemB 属乙区）', async () => {
       const response = await itemArchivePOST(
         makeRequest('POST', `/api/items/${fx.itemBId}/archive`, { token: ownerToken }),
-        { params: { id: fx.itemBId } },
+        { params: Promise.resolve({ id: fx.itemBId }) },
       );
       expect(response.status).toBe(404);
     });
@@ -464,7 +464,7 @@ describe('物品发布 / 编辑 / 归档（真连库）', () => {
     it('未登录 → 401', async () => {
       const response = await itemArchivePOST(
         makeRequest('POST', `/api/items/${ids.archNonOwner}/archive`),
-        { params: { id: ids.archNonOwner } },
+        { params: Promise.resolve({ id: ids.archNonOwner }) },
       );
       expect(response.status).toBe(401);
     });

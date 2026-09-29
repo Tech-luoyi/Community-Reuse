@@ -11,7 +11,7 @@ import { jsonOk, withRoute } from '@/server/http';
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 
-type ClaimRouteContext = { params: Promise<{ id: string }> | { id: string } };
+type ClaimRouteContext = { params: Promise<{ id: string }> };
 
 async function resolveClaimId(context: ClaimRouteContext): Promise<string> {
   const resolved = await context.params;
