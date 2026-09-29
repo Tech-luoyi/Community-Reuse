@@ -45,24 +45,35 @@ function activeCount(value: FilterValue): number {
  * 选中态用 `layoutId` 做弹簧位移动画（一个筛选组常驻一个 `framer-motion`
  * 组件，切换时还要重排），以及一个深色 `bg-stone-900` 排序按钮 —— 排序是
  * 辅助操作，不该比筛选更醒目。现在都是静态类名切换，无动画、无 emoji。
+ *
+ * 新增 `query` prop：**输入框的显示值与真正生效的搜索词分离**。
+ * 调用方（首页）把 `q` 防抖后再传进来，于是打字时框里的字立刻动、列表不跟着抖。
+ * 不这么做的话每敲一个字就发一次请求，中文输入法拼音组合态还会多打一次。
+ * 不传 `query` 时退化成原来的同步行为。
  */
 export function FilterBar({
   value,
   onChange,
+  query,
 }: {
   value: FilterValue;
   onChange: (v: FilterValue) => void;
+  /** 已防抖的生效值；缺省时用 `value.q`。 */
+  query?: string;
 }) {
   const set = (patch: Partial<FilterValue>) => onChange({ ...value, ...patch });
   const [sheetOpen, setSheetOpen] = useState(false);
   const pending = activeCount(value);
+  const searching = query !== undefined && query !== value.q;
 
   const pillClass = (active: boolean) =>
     cn(
-      'h-8 rounded-full border px-3 text-[13px] transition-colors',
+      // 选中态是「按下的胶囊」：贴一点地、给一道 inset 高光，而不是纯色块。
+      // 未选中只有边框，悬停才浮起来一点。三档高度差让当前筛选项一眼可辨。
+      'h-8 rounded-full border px-3 text-sm transition-[color,background-color,border-color,box-shadow] duration-200',
       active
-        ? 'border-ink bg-ink text-white'
-        : 'border-line bg-surface text-ink-secondary hover:border-line-strong hover:text-ink',
+        ? 'border-ink bg-ink text-ink-inverse shadow-sm'
+        : 'border-line bg-surface text-ink-secondary shadow-xs hover:border-line-strong hover:text-ink hover:shadow-sm',
     );
 
   const tradeRow = (idSuffix: string) => (
@@ -96,10 +107,10 @@ export function FilterBar({
   );
 
   const sortRow = (
-    <div className="flex items-center gap-2 text-xs text-ink-tertiary">
+    <div className="flex items-center gap-2 text-2xs text-ink-tertiary">
       <button
         onClick={() => set({ sort: value.sort === 'latest' ? 'oldest' : 'latest' })}
-        className="inline-flex h-8 items-center gap-1.5 rounded-full border border-line bg-surface px-3 text-[13px] text-ink-secondary transition-colors hover:border-line-strong hover:text-ink"
+        className="inline-flex h-8 items-center gap-1.5 rounded-full border border-line bg-surface px-3 text-sm text-ink-secondary shadow-xs transition-[box-shadow,background-color,border-color] duration-200 hover:border-line-strong hover:text-ink hover:shadow-sm"
       >
         <ArrowDownWideNarrow size={13} />
         {value.sort === 'latest' ? '越新越前' : '越老越前'}
@@ -108,7 +119,7 @@ export function FilterBar({
       <button
         onClick={() => onChange(EMPTY_FILTER)}
         disabled={pending === 0 && !value.q}
-        className="ml-auto inline-flex h-8 items-center gap-1.5 rounded-full px-2.5 text-[13px] text-ink-tertiary transition-colors hover:bg-surface-sunken hover:text-ink disabled:opacity-40"
+        className="ml-auto inline-flex h-8 items-center gap-1.5 rounded-full px-2.5 text-sm text-ink-tertiary transition-colors hover:bg-surface-sunken hover:text-ink disabled:opacity-40"
       >
         <RotateCcw size={12} /> 重置
       </button>
@@ -116,7 +127,8 @@ export function FilterBar({
   );
 
   return (
-    <div className="space-y-3 rounded-lg border border-line bg-surface p-3">
+    // 筛选区是一块「工具面板」，不是内容卡片：贴地阴影 + 稍紧的圆角。
+    <div className="space-y-3 rounded-xl border border-line bg-surface p-3.5 shadow-card">
       <div className="flex gap-2">
         <div className="relative flex-1">
           <Search
@@ -127,8 +139,18 @@ export function FilterBar({
             value={value.q}
             onChange={(e) => set({ q: e.target.value })}
             placeholder="搜物品名称或描述"
+            aria-label="搜物品名称或描述"
             className="h-9 pl-9 pr-16"
           />
+          {searching && (
+            /* 防抖窗口内：告诉用户「已经收到了，正在找」，而不是让列表静默不动。 */
+            <span
+              className="absolute right-9 top-1/2 -translate-y-1/2 text-2xs text-ink-tertiary"
+              aria-live="polite"
+            >
+              搜索中
+            </span>
+          )}
           {value.q && (
             <button
               onClick={() => set({ q: '' })}
@@ -146,7 +168,7 @@ export function FilterBar({
               <SlidersHorizontal size={15} />
               筛选
               {pending > 0 && (
-                <span className="ml-0.5 grid size-4 place-items-center rounded-full bg-ink text-[10px] font-medium text-white tabular">
+                <span className="ml-0.5 grid size-4 place-items-center rounded-full bg-ink text-[10px] font-medium text-ink-inverse tabular">
                   {pending}
                 </span>
               )}
@@ -179,7 +201,7 @@ export function FilterBar({
         {tradeRow('inline')}
         {freshRow}
       </div>
-      <div className="hidden border-t border-line pt-3 sm:block">{sortRow}</div>
+      <div className="hidden border-t border-line/80 pt-3.5 sm:block">{sortRow}</div>
     </div>
   );
 }

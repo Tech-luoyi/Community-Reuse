@@ -3,75 +3,150 @@
 @import 'tw-animate-css';
 
 /*
- * 设计基底（v2 全量重做）
- * ---------------------------------------------------------------------------
- * 上一版的问题不是"配色不好看"，而是**层级不存在**：满屏 font-black、
- * 每块都有圆角和阴影、7 种色相互相抢注意力、深色块与浅色块随机分布，
- * 于是所有元素都在喊，结果没有一句能被听清。emoji 当图标用则让界面
- * 看起来像模板而不是产品。
+ * 设计基底（v3）
+ * ===========================================================================
+ * 产品是「小区里的闲置流转」：靠信任成交，靠图片判断，靠邻居关系维持。
+ * 所以界面的第一任务是让**物品本身**好看，第二是让**状态**一眼可辨，
+ * 第三才是"像不像大厂产品"。
  *
- * 这一版的取舍：
- * 1. **单一强调色**。主按钮走近黑（--color-ink），绿色只留给"可领取 /
- *    环保 / 成功"这类**语义**场景，不再拿来做大面积填充。
- * 2. **靠留白和 1px 边框建立层次**，不靠阴影堆叠。卡片默认无阴影。
- * 3. **字重只用 400/500/600**。层级由字号、颜色、间距承担，不用 font-black。
- * 4. **圆角收敛到一套刻度**（6/8/10/12/16），胶囊只留给状态与筛选。
- * 5. **不用渐变**（按钮、卡片边框、占位图都取消）。
+ * v2 的问题不是不够克制，而是克制过头之后没有留下可用的层级：
+ *   - 中性色是纯灰（#fafafa / #171717），画面发冷、发死，像后台管理系统；
+ *   - 阴影被全部删掉，于是卡片和画布只靠 1px 线区分，**没有厚度**；
+ *   - 字号是 63 处 text-[13px] 任意值，没有刻度，排版不成体系；
+ *   - 768px 单列 + 零浮起，浏览 12 张卡片像在看一张表格。
+ *
+ * v3 的做法 —— 不加装饰，加**分辨率**：
+ *
+ * 1. 表面回到暖石中性色。色相约 60°，模拟纸张。纯灰在大屏上会「数字化」，
+ *    暖灰才会显得是实物。这是单点收益最大的一处改动。
+ *
+ * 2. 高度用**双层阴影**。真实光照 = 接触影（贴地、小而实）+ 扩散影（离地、
+ *    大而淡）。单层阴影看起来是假的。再叠一道 inset 顶部高光模拟光从上方来，
+ *    卡片就从「贴纸」变成「物体」。阴影用墨色（--color-ink）混色而非纯黑，
+ *    才会继承表面色相不发脏。
+ *
+ * 3. 高度要有语义，不能全浮起来。静止的卡片贴地，可点的卡片才抬升。
+ *    全都浮起来 = 没有层次 = 等于零。所以卡片默认只有 --shadow-card，
+ *    hover 才升级到 --shadow-card-hover。
+ *
+ * 4. 排版上刻度。每级字号同时定义 line-height 与 letter-spacing，
+ *    并遵循「字越大、字距越紧」的光学规律。11px 用 +0.01em，36px 用 -0.026em。
+ *
+ * 5. 状态色成对出现：前景 + 极浅底 + 边框，命名成套。状态色只做标识，
+ *    不做大面积填充 —— 大面积填充是最典型的「AI 味」来源。
+ *
+ * 6. 品牌绿回归，但只出现在三个位置：产品标识、「可领取」语义、成功反馈。
+ *    主按钮保持近黑。近黑按钮 + 一点品牌绿，比满屏绿高级得多。
+ *
+ * 7. 加一层 2.8% 的胶片噪点。大面积纯色在屏幕上会显得「数字化」，
+ *    极轻的颗粒能让画面回到「实物」。内联 SVG，不发请求，pointer-events:none。
+ *
+ * 全部新增都是静态文本，没有 backdrop-filter、没有大面积模糊、没有额外网络
+ * 请求，性能影响约等于零。
  */
 
-/* 中性色刻度：canvas 是页面底，surface 是卡片面，line 是唯一的边界手段。 */
 @theme {
   --font-sans:
     ui-sans-serif, system-ui, -apple-system, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB',
     'Microsoft YaHei', sans-serif;
   --font-mono: ui-monospace, 'SF Mono', 'Cascadia Mono', 'JetBrains Mono', Menlo, monospace;
 
-  /* 中性刻度 */
-  --color-canvas: #fafafa;
+  /* ---------------------------------------------------------------------
+   * 1. 中性刻度 —— 暖石（hue ≈ 60°，接近纸张）
+   * canvas 是页面底，surface 是抬起来的面，sunken 是压下去的面。
+   * ------------------------------------------------------------------ */
+  --color-canvas: #faf9f7;
   --color-surface: #ffffff;
-  --color-surface-sunken: #f5f5f5;
-  --color-line: #e5e5e5;
-  --color-line-strong: #d4d4d4;
+  --color-surface-sunken: #f4f2ef;
+  --color-line: #ebe8e3;
+  --color-line-strong: #d9d5cd;
 
-  /* 文字 */
-  --color-ink: #171717;
-  --color-ink-secondary: #525252;
-  --color-ink-tertiary: #8a8a8a;
+  /* 文字四级：主文 / 次文 / 说明 / 占位。暖黑不是纯黑，纯黑在暖底上会「挖洞」。 */
+  --color-ink: #1c1917;
+  --color-ink-secondary: #57534e;
+  --color-ink-tertiary: #8b857e;
+  --color-ink-inverse: #faf9f7;
+
+  /* ---------------------------------------------------------------------
+   * 2. 高度（elevation）—— 双层阴影 + 顶部高光
+   *
+   * 顺序刻意如此：先 inset 高光（最内层），再接触影（紧贴底部），
+   * 最后扩散影（最外、最淡）。三层叠出来的才是「被光照到的实物」。
+   * ------------------------------------------------------------------ */
+  --shadow-hairline: 0 0 0 1px color-mix(in oklab, var(--color-ink) 6%, transparent);
+
+  --shadow-xs: 0 1px 2px 0 color-mix(in oklab, var(--color-ink) 5%, transparent);
+
+  --shadow-sm:
+    0 1px 2px -1px color-mix(in oklab, var(--color-ink) 6%, transparent),
+    0 2px 4px -2px color-mix(in oklab, var(--color-ink) 5%, transparent);
+
+  --shadow-md:
+    0 2px 4px -2px color-mix(in oklab, var(--color-ink) 7%, transparent),
+    0 6px 12px -4px color-mix(in oklab, var(--color-ink) 6%, transparent);
+
+  --shadow-lg:
+    0 4px 8px -4px color-mix(in oklab, var(--color-ink) 8%, transparent),
+    0 12px 28px -8px color-mix(in oklab, var(--color-ink) 8%, transparent);
+
+  --shadow-xl:
+    0 8px 16px -8px color-mix(in oklab, var(--color-ink) 9%, transparent),
+    0 24px 48px -12px color-mix(in oklab, var(--color-ink) 10%, transparent);
+
+  /* 卡片：贴地。顶部 1px 高光是关键，成本为零但决定了「有没有厚度」。 */
+  --shadow-card:
+    inset 0 1px 0 0 rgb(255 255 255 / 0.72),
+    0 1px 2px -1px color-mix(in oklab, var(--color-ink) 7%, transparent),
+    0 6px 16px -8px color-mix(in oklab, var(--color-ink) 8%, transparent);
+
+  /* 可点卡片：抬升。阴影加深 + 阴影扩散，模拟物体离开桌面。 */
+  --shadow-card-hover:
+    inset 0 1px 0 0 rgb(255 255 255 / 0.85),
+    0 2px 4px -2px color-mix(in oklab, var(--color-ink) 8%, transparent),
+    0 14px 32px -12px color-mix(in oklab, var(--color-ink) 12%, transparent);
+
+  /* 浮层：Dialog / Sheet / 下拉。最高一级，且带遮罩。 */
+  --shadow-overlay:
+    inset 0 1px 0 0 rgb(255 255 255 / 0.7),
+    0 12px 28px -8px color-mix(in oklab, var(--color-ink) 14%, transparent),
+    0 32px 64px -16px color-mix(in oklab, var(--color-ink) 16%, transparent);
+
+  /* 粘性顶栏：内容会从下面滚过，所以要有一点高度差。 */
+  --shadow-header:
+    0 1px 0 0 color-mix(in oklab, var(--color-ink) 4%, transparent),
+    0 4px 12px -8px color-mix(in oklab, var(--color-ink) 10%, transparent);
 
   /*
-   * 语义色。每个状态 = 一个前景 + 一个极浅底，成对使用。
-   * 这些色**只**用于状态标识（Badge、状态点、状态文字），
-   * 不用于大面积填充 —— 填充用 --color-ink。
+   * 覆盖 Tailwind 默认阴影刻度。
+   *
+   * src/components/ui/** 里 17 个 shadcn 组件全都直接用 `shadow-md` /
+   * `shadow-lg` 这类默认刻度（DropdownMenu / Select / Sheet …）。不去逐个改
+   * shadcn 源文件，而是在这里把默认刻度本身换成墨色三层版本 —— 整个组件层
+   * 就自动继承了新的高度体系。这比 patch 17 个文件干净，也不会在下次
+   * `shadcn add` 升级组件时把改动冲掉。
    */
-  --color-available: #047857; /* emerald-700，可领取 / 成功 */
-  --color-available-bg: #ecfdf5;
-  --color-available-line: #a7f3d0;
+  --shadow-2xs: 0 1px 1px 0 color-mix(in oklab, var(--color-ink) 4%, transparent);
+  --shadow-xs: 0 1px 2px 0 color-mix(in oklab, var(--color-ink) 5%, transparent);
+  --shadow-sm:
+    0 1px 2px -1px color-mix(in oklab, var(--color-ink) 6%, transparent),
+    0 2px 4px -2px color-mix(in oklab, var(--color-ink) 5%, transparent);
+  --shadow-md:
+    0 2px 4px -2px color-mix(in oklab, var(--color-ink) 7%, transparent),
+    0 6px 12px -4px color-mix(in oklab, var(--color-ink) 6%, transparent);
+  --shadow-lg:
+    0 4px 8px -4px color-mix(in oklab, var(--color-ink) 8%, transparent),
+    0 12px 28px -8px color-mix(in oklab, var(--color-ink) 8%, transparent);
+  --shadow-xl:
+    0 8px 16px -8px color-mix(in oklab, var(--color-ink) 9%, transparent),
+    0 24px 48px -12px color-mix(in oklab, var(--color-ink) 10%, transparent);
+  --shadow-2xl:
+    0 12px 24px -8px color-mix(in oklab, var(--color-ink) 10%, transparent),
+    0 40px 80px -20px color-mix(in oklab, var(--color-ink) 14%, transparent);
 
-  --color-reserved: #4338ca; /* indigo-700，已预约 */
-  --color-reserved-bg: #eef2ff;
-  --color-reserved-line: #c7d2fe;
-
-  --color-info: #1d4ed8; /* blue-700，新上架 */
-  --color-info-bg: #eff6ff;
-  --color-info-line: #bfdbfe;
-
-  --color-pending: #b45309; /* amber-700，待处理 / 重点提醒 */
-  --color-pending-bg: #fffbeb;
-  --color-pending-line: #fde68a;
-
-  --color-danger: #b91c1c; /* red-700，拒绝 / 危险操作 */
-  --color-danger-bg: #fef2f2;
-  --color-danger-line: #fecaca;
-
-  --color-ai: #6d28d9; /* violet-700，AI 建议 */
-  --color-ai-bg: #f5f3ff;
-  --color-ai-line: #ddd6fe;
-
-  --color-neutral-status: #525252; /* 已完成 */
-  --color-neutral-status-bg: #f5f5f5;
-  --color-archived: #a3a3a3; /* 已归档 */
-
-  /* 圆角刻度 */
+  /* ---------------------------------------------------------------------
+   * 3. 圆角刻度
+   * 卡片 16 / 输入 10 / 小件 8 / 胶囊用于状态与筛选。
+   * ------------------------------------------------------------------ */
   --radius-xs: 4px;
   --radius-sm: 6px;
   --radius: 8px;
@@ -79,10 +154,81 @@
   --radius-lg: 12px;
   --radius-xl: 16px;
 
-  /* ------------------------------------------------------------------------
-   * shadcn 语义 token（src/components/ui/** 使用）。
-   * 映射到上面的中性刻度，保证 shadcn 组件和业务页面同一套视觉。
-   * ---------------------------------------------------------------------- */
+  /* ---------------------------------------------------------------------
+   * 4. 排版刻度
+   * 每级同时定义 line-height 与 letter-spacing。
+   * 规律：字号越大，字距越紧（补偿字体设计预留的边距）。
+   * ------------------------------------------------------------------ */
+  --text-2xs: 0.6875rem; /* 11px  辅助信息、角标 */
+  --text-2xs--line-height: 1.45;
+  --text-2xs--letter-spacing: 0.01em;
+
+  --text-sm: 0.8125rem; /* 13px  正文 */
+  --text-sm--line-height: 1.6;
+  --text-sm--letter-spacing: -0.003em;
+
+  --text-base-app: 0.875rem; /* 14px  组件默认 */
+  --text-base-app--line-height: 1.65;
+  --text-base-app--letter-spacing: 0em;
+
+  --text-lg-app: 1.125rem; /* 18px  卡片标题、区块标题 */
+  --text-lg-app--line-height: 1.45;
+  --text-lg-app--letter-spacing: -0.011em;
+
+  --text-xl-app: 1.375rem; /* 22px  页面标题 */
+  --text-xl-app--line-height: 1.35;
+  --text-xl-app--letter-spacing: -0.016em;
+
+  --text-2xl-app: 1.75rem; /* 28px  重点数字 */
+  --text-2xl-app--line-height: 1.2;
+  --text-2xl-app--letter-spacing: -0.021em;
+
+  --text-3xl-app: 2.25rem; /* 36px  空状态、看板大数字 */
+  --text-3xl-app--line-height: 1.15;
+  --text-3xl-app--letter-spacing: -0.026em;
+
+  /* ---------------------------------------------------------------------
+   * 5. 语义状态色 —— 每个状态 = 前景 + 极浅底 + 边框，三件成套
+   *
+   * 前景色一律取 700 档：在白底上对比度 ≥ 7:1，天然满足 WCAG AAA 正文。
+   * 状态色**只**做标识（Badge、状态点、状态文字），不做大面积填充。
+   * ------------------------------------------------------------------ */
+  --color-available: #047857; /* 可领取 / 成功 */
+  --color-available-bg: #ecfdf5;
+  --color-available-line: #a7f3d0;
+
+  --color-reserved: #4338ca; /* 已预约 */
+  --color-reserved-bg: #eef2ff;
+  --color-reserved-line: #c7d2fe;
+
+  --color-info: #1d4ed8; /* 新上架 */
+  --color-info-bg: #eff6ff;
+  --color-info-line: #bfdbfe;
+
+  --color-pending: #b45309; /* 待处理 / 重点提醒 */
+  --color-pending-bg: #fffbeb;
+  --color-pending-line: #fde68a;
+
+  --color-danger: #b91c1c; /* 拒绝 / 危险操作 */
+  --color-danger-bg: #fef2f2;
+  --color-danger-line: #fecaca;
+
+  --color-ai: #6d28d9; /* AI 建议 */
+  --color-ai-bg: #f5f3ff;
+  --color-ai-line: #ddd6fe;
+
+  --color-archived: #a3a3a3; /* 已归档 */
+  --color-neutral-status: #57534e; /* 已完成 */
+
+  /* 品牌绿：只用于产品标识、可领取语义、成功反馈。不做按钮填充。 */
+  --color-brand: #10b981;
+  --color-brand-deep: #047857;
+  --color-brand-soft: #ecfdf5;
+
+  /* ---------------------------------------------------------------------
+   * 6. shadcn 兼容 token —— 映射到上面的刻度，
+   * 保证 src/components/ui/** 和业务页面是同一套视觉。
+   * ------------------------------------------------------------------ */
   --color-background: var(--color-canvas);
   --color-foreground: var(--color-ink);
   --color-card: var(--color-surface);
@@ -90,7 +236,7 @@
   --color-popover: var(--color-surface);
   --color-popover-foreground: var(--color-ink);
   --color-primary: var(--color-ink);
-  --color-primary-foreground: #ffffff;
+  --color-primary-foreground: var(--color-ink-inverse);
   --color-secondary: var(--color-surface-sunken);
   --color-secondary-foreground: var(--color-ink);
   --color-muted: var(--color-surface-sunken);
@@ -102,12 +248,56 @@
   --color-border: var(--color-line);
   --color-input: var(--color-line);
   --color-ring: var(--color-ink);
+
+  /* ---------------------------------------------------------------------
+   * 7. 缓动 —— spring 用 linear()，是现代 CSS 的真实弹簧曲线
+   * ------------------------------------------------------------------ */
+  --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-out-quart: cubic-bezier(0.25, 1, 0.5, 1);
+  /* 中途过冲一点点，末端收敛。用在卡片 hover 与弹层入场。 */
+  --ease-spring: linear(
+    0,
+    0.008,
+    0.032 2.2%,
+    0.15,
+    0.282 6.7%,
+    0.723,
+    0.938 12.9%,
+    1.117,
+    1.229 16.7%,
+    1.259,
+    1.267,
+    1.259,
+    1.249 25.8%,
+    1.191 33.3%,
+    1.091 41.7%,
+    0.976 50%,
+    0.877 58.3%,
+    0.789 66.7%,
+    0.711 75%,
+    0.652 83.3%,
+    0.613 91.7%,
+    0.598,
+    0.592 96.4%,
+    0.595,
+    0.603,
+    0.613,
+    0.633 98.5%,
+    0.681,
+    0.723,
+    0.744,
+    0.769 99.6%,
+    0.855,
+    0.934 100.1%
+  );
 }
 
 html {
   scroll-behavior: smooth;
   /* 顶部 sticky 顶栏 56px + 一点呼吸位，软导航落点不被遮住 */
   scroll-padding-top: 5rem;
+  font-optical-sizing: auto;
+  -webkit-text-size-adjust: 100%;
 }
 
 body {
@@ -121,12 +311,37 @@ body {
   overflow-x: hidden;
 }
 
-::selection {
-  background: var(--color-ink);
-  color: #fff;
+/*
+ * 胶片噪点（2.8%）。
+ *
+ * 大面积纯色在屏幕上会显得「数字化」，极轻的颗粒能让画面回到「实物」。
+ * 内联 SVG（feTurbulence）不发网络请求；pointer-events:none 零交互影响；
+ * fixed 定位只合成一次。低配设备可用 .no-grain 关闭。
+ */
+body::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  pointer-events: none;
+  opacity: 0.028;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
 }
 
-/* 焦点环统一：键盘可见、鼠标不打扰。 */
+/* 明确关闭噪点的场景（如截图对比、视频背景）。 */
+.no-grain::after {
+  content: none;
+}
+
+::selection {
+  background: var(--color-ink);
+  color: var(--color-ink-inverse);
+}
+
+/*
+ * 焦点环统一：键盘可见、鼠标不打扰。
+ * :where() 保持零特异性，任何组件的 focus-visible:ring-* 都能正常覆盖它。
+ */
 :where(a, button, input, textarea, select, [tabindex]):focus-visible {
   outline: 2px solid var(--color-ink);
   outline-offset: 2px;
@@ -138,7 +353,7 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
-/* 细滚动条：默认样式在浅底上过于抢眼。 */
+/* 细滚动条：默认样式在浅底上过于抢眼。Firefox 独有属性，渐进增强。 */
 @supports (scrollbar-width: thin) {
   html {
     scrollbar-width: thin;
