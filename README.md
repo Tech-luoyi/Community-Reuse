@@ -218,5 +218,6 @@ npm run test:integration   # 20 passed
 3. **图片落盘 `public/uploads`**：由 Next.js 静态托管，`output: 'standalone'` / 独立 CDN 部署下需改用对象存储（`StorageAdapter` 已留扩展点，换实现即可）。
 4. **`npm run build` 前先停 `npm run dev`**：Next.js 15 的 dev 与 build 共用 `.next`，否则会出现 `routes-manifest.json` 缺失类报错；遇到时删除 `.next` 重来。
 5. **Node 版本**：`engines` 要求 `>=22 <23`；用更新的 Node（如 24）运行会报 `EBADENGINE` 警告，功能不受影响。
+6. **dev 下保存文件会卡住正在进行的请求**（`next dev` 固有行为，非 bug）：任何 `src/**` 变更都会触发 4-5 个编译器依次重建，**累计约 3.9 秒**工作量，期间进来的请求排队等待。实测影响：多人/多会话共用一个工作目录时，一方保存会让另一方的导航随机停顿 **1.5-4.7 秒**；无人改动时导航稳定在 153-452ms（16 次采样 0 停顿），有人改动时 12 次采样 2 次停顿（2116ms、4678ms）。**这不是前端性能问题**——同场景下打字 `keydown → 绘制` 中位 13ms、帧间隔中位 6ms、0 长任务；耗时全在服务端 TTFB（首次访问某页 1.8-6.1s，客户端仅占 174-1757ms）。生产 `next start` 无此环节：导航 35-69ms、按钮 11-17ms、0 长任务，**ms 级要求以生产为准**。要消除该停顿只能隔离工作副本（如 `git worktree` 各起各的 dev server）。
 
 > 历史沙箱限制（Prisma CLI 被 SIGKILL、Docker 未运行、仅实现 health）均已解除：本轮迁移已在 **PostgreSQL 16** 上 `prisma:deploy` 落地，`tests/integration/**` 真连库 **171 项全绿**，25 个 Route Handler 全部实现。
