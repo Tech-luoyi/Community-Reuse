@@ -12,6 +12,8 @@ import type { Prisma } from '@prisma/client';
 
 import { UpdateItemRequestSchema } from '@/shared/schemas';
 
+import { getEmbeddingProvider } from '@/server/ai/embeddings';
+import { indexAfterCommit } from '@/server/ai/index-pipeline';
 import { requireMember, requireOwner, requireUser } from '@/server/auth/guard';
 import { getSessionFromRequest } from '@/server/auth/session';
 import { prisma } from '@/server/db';
@@ -78,7 +80,7 @@ export const PATCH = withRoute(
     }
 
     const imageKeys = body.imageKeys;
-    await prisma.$transaction(async (tx) => {
+    const updated = await prisma.$transaction(async (tx) => {
       if (imageKeys !== undefined) {
         await tx.itemImage.deleteMany({ where: { itemId } });
         if (imageKeys.length > 0) {
@@ -91,8 +93,17 @@ export const PATCH = withRoute(
           });
         }
       }
-      await tx.item.update({ where: { id: itemId }, data });
+      return tx.item.update({
+        where: { id: itemId },
+        data,
+        select: { id: true, name: true, description: true, category: true },
+      });
     });
+
+    // 语义索引在事务提交后重算、且不 await：embedding 挂了不该让编辑失败（§6.5.9）。
+    // 从 update 的 select 直接取合并后的字段，而不是拿请求体去猜——部分更新时
+    // 「没传」和「传了空串」是两件事，读回来的行才是唯一事实。
+    indexAfterCommit(updated, getEmbeddingProvider());
 
     const dto = await loadItemDto(itemId, viewer);
     return jsonOk(dto);

@@ -11,6 +11,8 @@
  */
 import { CreateItemRequestSchema, ItemListQuerySchema } from '@/shared/schemas';
 
+import { getEmbeddingProvider } from '@/server/ai/embeddings';
+import { indexAfterCommit } from '@/server/ai/index-pipeline';
 import { assertCurrentCommunity, requireMember, requireUser } from '@/server/auth/guard';
 import { getSessionFromRequest } from '@/server/auth/session';
 import { prisma } from '@/server/db';
@@ -67,8 +69,12 @@ export const POST = withRoute(async (request: Request): Promise<Response> => {
             }
           : undefined,
     },
-    select: { id: true },
+    select: { id: true, name: true, description: true, category: true },
   });
+
+  // 语义索引挂在写之后、且不 await：embedding 服务的成败不该决定发布接口的成败（§6.5.9）。
+  // 没配 EMBEDDING_API_KEY 时 provider 为 null，本调用直接记为 skipped。
+  indexAfterCommit(created, getEmbeddingProvider());
 
   const dto = await loadItemDto(created.id, viewer);
   return jsonCreated(dto);
