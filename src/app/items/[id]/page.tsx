@@ -5,9 +5,9 @@ import { useParams, useRouter } from 'next/navigation';
 import { AnimatePresence, motion } from 'framer-motion';
 import { ArrowLeft, CalendarClock, Heart } from 'lucide-react';
 import { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
-import { get } from '@/lib/api';
-import { PENDING_ENDPOINTS } from '@/lib/pending';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { toast } from 'sonner';
+import { del, get, post } from '@/lib/api';
 import {
   formatAgeHours,
   formatDateTime,
@@ -15,16 +15,20 @@ import {
   freshnessStyle,
   TRADE_TYPE_LABEL,
 } from '@/lib/format';
-import { Badge, Button, Card, EmptyState, PendingApi } from '@/components/ui';
+import { Badge, Button, Card, EmptyState } from '@/components/ui';
 import { ClaimPanel } from '@/components/ClaimPanel';
 import { FaqAssistant } from '@/components/ai';
+import { MessageBoard } from '@/components/MessageBoard';
+import type { FavoriteResult } from '@/shared/schemas';
 import type { ItemDetailDto } from '@/shared/types';
 
 export default function ItemDetailPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
+  const qc = useQueryClient();
   const [imgIdx, setImgIdx] = useState(0);
   const [failedImgs, setFailedImgs] = useState<string[]>([]);
+  const [favPending, setFavPending] = useState(false);
 
   const {
     data: item,
@@ -34,6 +38,23 @@ export default function ItemDetailPage() {
     queryKey: ['item', id],
     queryFn: () => get<ItemDetailDto>(`/api/items/${id}`),
   });
+
+  async function toggleFavorite() {
+    if (!item) return;
+    setFavPending(true);
+    try {
+      const next = item.viewer.isFavorite;
+      const r = next
+        ? await del<FavoriteResult>(`/api/items/${id}/favorite`)
+        : await post<FavoriteResult>(`/api/items/${id}/favorite`);
+      toast.success(r.favorited ? '已加入收藏 ❤️' : '已取消收藏');
+      await qc.invalidateQueries({ queryKey: ['item', id] });
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : '操作失败');
+    } finally {
+      setFavPending(false);
+    }
+  }
 
   if (isLoading) {
     return (
@@ -101,18 +122,19 @@ export default function ItemDetailPage() {
                 </Badge>
                 <Badge className="bg-black/55 text-white">{item.status}</Badge>
               </div>
-              {/*
-                收藏态取自服务端真实字段 `viewer.isFavorite`，不维护本地假状态：
-                `POST/DELETE /api/items/:id/favorite`（契约 §6）尚未实现，
-                点亮后又随刷新消失的爱心比没有爱心更糟。接口就位后去掉 disabled 即可。
-              */}
               <button
-                disabled
-                title="收藏接口待联调（api-contract.md §6）"
+                onClick={toggleFavorite}
+                disabled={favPending}
+                aria-pressed={item.viewer.isFavorite}
                 aria-label="收藏"
-                className="absolute right-4 top-4 grid h-10 w-10 cursor-not-allowed place-items-center rounded-full bg-white/85 text-stone-400"
+                title={item.viewer.isFavorite ? '取消收藏' : '加入收藏'}
+                className="absolute right-4 top-4 grid h-10 w-10 place-items-center rounded-full bg-white shadow-sm transition active:scale-90 disabled:opacity-60"
               >
-                <Heart size={18} fill={item.viewer.isFavorite ? 'currentColor' : 'none'} />
+                <Heart
+                  size={18}
+                  className={item.viewer.isFavorite ? 'text-red-500' : 'text-stone-400'}
+                  fill={item.viewer.isFavorite ? 'currentColor' : 'none'}
+                />
               </button>
             </div>
             {images.length > 1 && (
@@ -163,11 +185,7 @@ export default function ItemDetailPage() {
 
           <Card className="p-5">
             <h3 className="mb-3 font-black">💬 公开留言板</h3>
-            <PendingApi
-              endpoint={PENDING_ENDPOINTS.itemMessages}
-              section="§5"
-              note="留言板把重复私聊（「还在吗」「几成新」）沉淀成物品下的公共问答；按契约 FAQ 生成的回复只允许发布者一键发进这里。"
-            />
+            <MessageBoard itemId={item.id} />
           </Card>
         </div>
 

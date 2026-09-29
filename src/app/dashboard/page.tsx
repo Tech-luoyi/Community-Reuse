@@ -5,20 +5,10 @@ import { Crown, Flame, Loader2, Timer } from 'lucide-react';
 import { useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { get } from '@/lib/api';
-import { PENDING_ENDPOINTS } from '@/lib/pending';
-import { Card, EmptyState, PendingApi, SectionTitle, Skeleton } from '@/components/ui';
+import { Card, EmptyState, ErrorPanel, SectionTitle, Skeleton } from '@/components/ui';
 import { useItems } from '@/hooks/use-items';
 import type { ItemDto } from '@/shared/types';
-
-interface StatsDto {
-  monthPublished: number;
-  monthCompleted: number;
-  activeCount: number;
-  fastestItem: { id: string; name: string; durationMinutes: number } | null;
-  mostWantedItem: { id: string; name: string; wantCount: number } | null;
-  timezone: string;
-  monthRange: { start: string; end: string };
-}
+import type { StatsDto } from '@/shared/schemas';
 
 /* recharts 约 120 kB：让四张统计卡先画完，图表随后再取，别跟首屏抢带宽。 */
 const DashboardCharts = dynamic(() => import('@/components/DashboardCharts'), {
@@ -33,9 +23,15 @@ const DashboardCharts = dynamic(() => import('@/components/DashboardCharts'), {
 });
 
 export default function DashboardPage() {
-  const { data: stats, isLoading: statsLoading } = useQuery({
+  const {
+    data: stats,
+    isLoading: statsLoading,
+    isError: statsError,
+    isFetching: statsFetching,
+    refetch: refetchStats,
+  } = useQuery({
     queryKey: ['stats'],
-    queryFn: () => get<StatsDto>('/api/stats/community').catch(() => null),
+    queryFn: () => get<StatsDto>('/api/stats/community'),
   });
   const { data: itemsData, isLoading: itemsLoading } = useItems({ pageSize: 100 });
 
@@ -62,46 +58,20 @@ export default function DashboardPage() {
   }, [items]);
 
   /*
-    `GET /api/stats/community`（契约 §7）尚未实现，所以这里只放**真实接口算得出的量**，
-    并且按它们的真实口径命名：`items` 是当前已加载的那一页 ACTIVE 物品，
-    既不是全量也不是自然月 —— 所以标签写「本页」，不写「累计 / 本月」。
-    需要服务端聚合的「本月成交」显示 `—`，绝不用 `0` 冒充一个合法的零。
+    三张卡全部取自 `GET /api/stats/community`（契约 §7）的服务端聚合：
+    按社区全量、按 Asia/Shanghai 自然月，口径与 `monthRange` 逐字一致。
+    下面的两张分布图仍按当前页算，所以标题明确写「本页」，不冒充全量。
   */
-  const totalActive = itemsData?.pagination.total ?? items.length;
-  const wantOnPage = items.reduce((s, i) => s + i.claimCount, 0);
-  const favOnPage = items.reduce((s, i) => s + i.favoriteCount, 0);
-
   const cards = [
-    {
-      label: stats ? '本月发布' : '在架总数',
-      value: stats?.monthPublished ?? totalActive,
-      emoji: '📦',
-      grad: 'from-emerald-500 to-teal-500',
-    },
-    {
-      label: '本月成交',
-      value: stats?.monthCompleted ?? '—',
-      emoji: '🤝',
-      grad: 'from-orange-500 to-amber-500',
-    },
-    {
-      label: '本页被想要',
-      value: wantOnPage,
-      emoji: '🙋',
-      grad: 'from-violet-500 to-fuchsia-500',
-    },
-    {
-      label: '本页被收藏',
-      value: favOnPage,
-      emoji: '❤️',
-      grad: 'from-sky-500 to-cyan-500',
-    },
+    { label: '本月发布', value: stats?.monthPublished, emoji: '📦', grad: 'from-emerald-500 to-teal-500' },
+    { label: '本月成交', value: stats?.monthCompleted, emoji: '🤝', grad: 'from-orange-500 to-amber-500' },
+    { label: '当前在售', value: stats?.activeCount, emoji: '🏷️', grad: 'from-sky-500 to-cyan-500' },
   ];
 
   if (statsLoading && itemsLoading) {
     return (
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        {Array.from({ length: 4 }).map((_, i) => (
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+        {Array.from({ length: 3 }).map((_, i) => (
           <Skeleton key={i} className="h-28" />
         ))}
       </div>
@@ -117,18 +87,21 @@ export default function DashboardPage() {
             社区活跃<span className="text-emerald-600">一览</span>
           </>
         }
-        desc={`聚合按 Asia/Shanghai 自然月${stats ? `（${stats.monthRange.start.slice(0, 10)} ~ ${stats.monthRange.end.slice(0, 10)}）` : '（服务端聚合未就位，下方为前端按当前页实时算）'}`}
+        desc={`服务端按社区全量与 ${'Asia/Shanghai'} 自然月聚合${
+          stats ? `（${stats.monthRange.start.slice(0, 10)} ~ ${stats.monthRange.end.slice(0, 10)}）` : ''
+        }`}
       />
 
-      {!stats && (
-        <PendingApi
-          endpoint={PENDING_ENDPOINTS.communityStats}
-          section="§7"
-          note="本月发布 / 本月成交 / 最快被领走 / 最想要 这四项要按社区全量与 Asia/Shanghai 自然月在服务端聚合，前端拿不到完整数据集就不假装算得出。当前四张卡只有「在架总数」是全量真值，其余两张按本页命名。"
+      {statsError && (
+        <ErrorPanel
+          title="看板聚合加载失败"
+          hint="接口已就位，读不到就是出错了 —— 空值和 0 都会是一个假事实，所以这里不放数字。"
+          onRetry={() => void refetchStats()}
+          fetching={statsFetching}
         />
       )}
 
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
         {cards.map((c) => (
           <div key={c.label}>
             <Card className="relative overflow-hidden p-4">
@@ -136,8 +109,8 @@ export default function DashboardPage() {
                 className={`absolute -right-6 -top-6 h-24 w-24 rounded-full bg-gradient-to-br ${c.grad} opacity-20 blur-2xl`}
               />
               <div className="text-2xl">{c.emoji}</div>
-              <div key={c.value} className="mt-1 text-3xl font-black tabular-nums">
-                {c.value}
+              <div key={c.label} className="mt-1 text-3xl font-black tabular-nums">
+                {c.value ?? '—'}
               </div>
               <div className="text-xs font-bold text-stone-500">{c.label}</div>
             </Card>
@@ -164,8 +137,8 @@ export default function DashboardPage() {
               ) : (
                 <div className="mt-0.5 text-sm font-bold text-stone-500">
                   {stats
-                    ? '本月还没有成交记录'
-                    : '不可知 —— 需 §7 服务端聚合，前端拿不到全量 completedAt'}
+                    ? '还没有成交记录（口径为全部历史首次成交，不限本月）'
+                    : '不可知 —— 聚合请求失败'}
                 </div>
               )}
             </div>
@@ -184,14 +157,12 @@ export default function DashboardPage() {
                 <div className="mt-0.5 font-black">
                   {stats.mostWantedItem.name} · {stats.mostWantedItem.wantCount} 人想要
                 </div>
-              ) : items.length ? (
-                <div className="mt-0.5 text-sm font-bold text-stone-500">
-                  {[...items].sort((a, b) => b.claimCount - a.claimCount)[0]?.name} ·{' '}
-                  {[...items].sort((a, b) => b.claimCount - a.claimCount)[0]?.claimCount}{' '}
-                  人想要（仅本页）
-                </div>
               ) : (
-                <div className="mt-0.5 text-sm font-bold text-stone-500">暂无数据</div>
+                <div className="mt-0.5 text-sm font-bold text-stone-500">
+                  {stats
+                    ? '没有在架物品被想要过（已成交的按定义排除在外）'
+                    : '不可知 —— 聚合请求失败'}
+                </div>
               )}
             </div>
           </Card>

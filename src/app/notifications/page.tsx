@@ -1,22 +1,14 @@
 'use client';
 
 import Link from 'next/link';
-import { BellRing, CheckCheck, Loader2 } from 'lucide-react';
+import { BellRing, CheckCheck } from 'lucide-react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { get, post } from '@/lib/api';
 import { cn } from '@/lib/cn';
 import { formatDateTime } from '@/lib/format';
-import { Button, EmptyState, SectionTitle, Skeleton } from '@/components/ui';
-
-interface NotificationDto {
-  id: string;
-  type: string;
-  title: string;
-  content: string;
-  readAt: string | null;
-  createdAt: string;
-}
+import { Button, EmptyState, ErrorPanel, SectionTitle, Skeleton } from '@/components/ui';
+import type { NotificationDto } from '@/shared/schemas';
 
 const TYPE_ICON: Record<string, { e: string; bg: string }> = {
   CLAIM_RECEIVED: { e: '🙋', bg: 'from-amber-400 to-orange-500' },
@@ -29,12 +21,15 @@ const TYPE_ICON: Record<string, { e: string; bg: string }> = {
 
 export default function NotificationsPage() {
   const qc = useQueryClient();
-  const { data, isLoading } = useQuery({
+  const {
+    data,
+    isLoading,
+    isError,
+    isFetching,
+    refetch,
+  } = useQuery({
     queryKey: ['notifications'],
     queryFn: () => get<NotificationDto[]>('/api/me/notifications'),
-    // §6 的读取接口尚未实现：接好线但不发请求，避免每次进页面吃一个 404。
-    // 下面 `data === null` 分支已经是诚实的「联调中」态，因此这里无需再兜底假数据。
-    enabled: false,
   });
 
   async function markRead(id: string) {
@@ -51,7 +46,9 @@ export default function NotificationsPage() {
     if (!data) return;
     const unread = data.filter((n) => !n.readAt);
     if (!unread.length) return toast.info('没有未读通知');
-    await Promise.all(unread.map((n) => markRead(n.id)));
+    await Promise.all(unread.map((n) => post(`/api/me/notifications/${n.id}/read`)));
+    await qc.invalidateQueries({ queryKey: ['notifications'] });
+    await qc.invalidateQueries({ queryKey: ['notifications-badge'] });
     toast.success(`已读 ${unread.length} 条 ✅`);
   }
 
@@ -65,19 +62,16 @@ export default function NotificationsPage() {
     );
   }
 
-  if (data === null || data === undefined) {
+  if (isError || !data) {
     return (
       <div className="mx-auto max-w-2xl">
-        <SectionTitle
-          kicker="通知"
-          title="站内通知"
-          desc="站内通知后端接口待联调（api-contract.md §6），前端已按契约实现。"
-        />
+        <SectionTitle kicker="通知" title="站内通知" desc="读取失败时不放数字，也不显示「全部已读」。" />
         <div className="mt-4">
-          <EmptyState
-            emoji="📭"
-            title="通知接口联调中"
-            hint="GET /api/me/notifications · POST /api/me/notifications/:id/read"
+          <ErrorPanel
+            title="通知读取失败"
+            hint="接口已就位，读不到就是出错了。"
+            onRetry={() => void refetch()}
+            fetching={isFetching}
           />
         </div>
       </div>
@@ -147,7 +141,6 @@ export default function NotificationsPage() {
         <Link href="/requests" className="text-emerald-600 hover:underline">
           · 去处理领取申请 →
         </Link>
-        {!data.length && <Loader2 size={13} className="hidden" />}
       </div>
     </div>
   );

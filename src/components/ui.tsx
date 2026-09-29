@@ -1,4 +1,5 @@
 import { cn } from '@/lib/cn';
+import { RefreshCw } from 'lucide-react';
 import { cva, type VariantProps } from 'class-variance-authority';
 import React from 'react';
 
@@ -145,31 +146,32 @@ export function SectionTitle({
 }
 
 /**
- * 「接口待联调」态：契约已定稿但后端尚未实现的接口，用这个而不是空态。
+ * 「请求失败」态：接口已就位却读不到时用它，而不是 `EmptyState`。
  *
- * 与 `EmptyState` 的分工是刻意的 —— 空态断言「这里没有数据」，
- * 而本组件只陈述「这个能力还没有服务端」，两者不可互相冒充（见 `src/lib/pending.ts`）。
+ * 分工是刻意的 —— 空态断言「这里没有数据」，本组件只陈述「这次没读到」。
+ * 用 `.catch(() => [])` 把失败下沉成空态，会让用户读到假事实
+ * （例：收藏夹明明有东西，却显示「还空着」）。
  */
-export function PendingApi({
-  endpoint,
-  section,
-  note,
+export function ErrorPanel({
+  title,
+  hint,
+  onRetry,
+  fetching,
 }: {
-  endpoint: string;
-  section: string;
-  note?: React.ReactNode;
+  title: string;
+  hint: string;
+  onRetry?: () => void;
+  fetching?: boolean;
 }) {
   return (
-    <div className="rounded-2xl border border-dashed border-stone-300 bg-stone-50 p-4 text-center text-xs leading-relaxed text-stone-500">
-      <div className="flex flex-wrap items-center justify-center gap-x-2 gap-y-1 font-bold text-stone-600">
-        <span aria-hidden>🚧</span>
-        接口待联调
-        <code className="rounded bg-stone-200/70 px-1.5 py-0.5 font-mono text-[11px] font-semibold text-stone-700">
-          {endpoint}
-        </code>
-      </div>
-      {note && <p className="mx-auto mt-2 max-w-md">{note}</p>}
-      <p className="mt-2 font-mono text-[11px] text-stone-400">契约 api-contract.md {section}</p>
+    <div className="rounded-2xl border border-dashed border-rose-200 bg-rose-50/60 p-4 text-sm">
+      <div className="font-black text-rose-700">{title}</div>
+      <p className="mt-1 leading-relaxed text-rose-600/90">{hint}</p>
+      {onRetry && (
+        <Button size="sm" variant="outline" className="mt-2" onClick={onRetry}>
+          <RefreshCw size={13} className={fetching ? 'animate-spin' : undefined} /> 重试
+        </Button>
+      )}
     </div>
   );
 }

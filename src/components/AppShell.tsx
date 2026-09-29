@@ -3,9 +3,12 @@
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { Bell, Compass, Heart, LayoutDashboard, PlusCircle, Recycle, User } from 'lucide-react';
+import { useQuery } from '@tanstack/react-query';
 import { cn } from '@/lib/cn';
+import { get } from '@/lib/api';
 import { Button } from './ui';
 import { useMe } from '@/hooks/use-me';
+import type { NotificationDto } from '@/shared/schemas';
 
 const NAV = [
   { href: '/', label: '发现', icon: Compass },
@@ -19,6 +22,19 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
   const { data: me } = useMe();
+
+  /*
+    红点取自 `GET /api/me/notifications?unreadOnly=true`（契约 §6）的真实条数。
+    读不到时 `unread` 为 undefined，此时不渲染任何角标 —— 而不是显示 0，
+    因为 0 会被读成「没有新通知」这个假事实。
+  */
+  const { data: unread } = useQuery({
+    queryKey: ['notifications-badge'],
+    queryFn: () => get<NotificationDto[]>('/api/me/notifications', { unreadOnly: true }),
+    enabled: !!me,
+    refetchInterval: 60_000,
+  });
+  const unreadCount = unread?.length;
 
   return (
     <div className="min-h-dvh">
@@ -61,21 +77,18 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           </nav>
 
           <div className="ml-auto flex items-center gap-2">
-            {/*
-              未读红点需要 `GET /api/me/notifications`（契约 §6）才能给出真实数字。
-              该接口尚未实现，所以这里不轮询、也不显示 0 —— 0 会被读成「没有新通知」这个假事实。
-            */}
             <Link
               href="/notifications"
-              title="站内通知：接口待联调（api-contract.md §6）"
-              className="relative grid h-10 w-10 place-items-center rounded-2xl border border-stone-200 bg-white/80 transition hover:-translate-y-0.5 hover:shadow"
-              aria-label="通知"
+              title={unreadCount ? `${unreadCount} 条未读通知` : '站内通知'}
+              className="relative grid h-10 w-10 place-items-center rounded-2xl border border-stone-200 bg-white transition hover:-translate-y-0.5 hover:shadow"
+              aria-label={unreadCount ? `通知（${unreadCount} 条未读）` : '通知'}
             >
-              <Bell size={18} className="text-stone-500" />
-              <span
-                aria-hidden
-                className="absolute right-2 top-2 size-1.5 rounded-full bg-stone-300"
-              />
+              <Bell size={18} className={unreadCount ? 'text-amber-600' : 'text-stone-500'} />
+              {!!unreadCount && (
+                <span className="absolute -right-1 -top-1 grid min-w-4.5 place-items-center rounded-full bg-rose-500 px-1 text-[10px] font-black leading-4 text-white shadow">
+                  {unreadCount > 99 ? '99+' : unreadCount}
+                </span>
+              )}
             </Link>
             {me ? (
               <button

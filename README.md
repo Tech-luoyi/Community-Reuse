@@ -50,9 +50,9 @@ community-reuse/
 
 ## 前端（页面与交互）
 
-- **技术栈**：Tailwind CSS v4（CSS-first `@theme`，无 `tailwind.config`）、framer-motion（`layoutId` 导航药丸 / 入场错峰 / 卡片倾斜 / 弹簧筛选）、TanStack Query（`keepPreviousData` 分页）、react-hook-form + zodResolver（**与后端共用 `src/shared/schemas.ts`，同源校验**）、recharts（看板图表）、lucide-react、sonner、canvas-confetti。组件为手写 shadcn 风格（`src/components/ui.tsx`，cva 变体），未引入 CLI。
+- **技术栈**：Tailwind CSS v4（CSS-first `@theme`，无 `tailwind.config`）、framer-motion（仅保留 `AnimatePresence` 出入场与两处 `layoutId` 药丸）、TanStack Query（`keepPreviousData` 分页）、react-hook-form + zodResolver（**与后端共用 `src/shared/schemas.ts`，同源校验**）、recharts（看板图表，`next/dynamic` 懒加载）、lucide-react、sonner、canvas-confetti（动态 `import()`）。组件为手写 shadcn 风格（`src/components/ui.tsx`，cva 变体），未引入 CLI。
 - **页面**：`/` 发现流、`/join` 邀请码加入、`/items/new` 发布（含 AI 定价 / 润色助手、canvas WebP 图片压缩）、`/items/[id]` 详情（画廊 + 想要面板 + 公开留言板）、`/dashboard` 看板、`/requests` 申请收发、`/favorites` 收藏、`/notifications` 通知、`/me` 个人中心。
-- **降级优先**：`GET /api/stats/community`、`messages`、`favorites`、`notifications` 等接口未实现时，前端自动切到客户端聚合 / 占位态（徽标标注「接口待联调」），页面不白屏。
+- **诚实降级**：看板四项取自 `GET /api/stats/community` 的服务端聚合，前端不再用当前页数据冒充全量；两张分布图仍按已加载页聚合，标题即写明口径。接口调用失败一律渲染 `ErrorPanel` + 重试，**不用 `.catch(() => [])` 把「没读到」下沉成「没有数据」**——那会对确实有内容的用户报假事实。
 - **校验**：`npm run lint` → `npm run typecheck` → `npm run test` → `npm run build` 全绿。
 
 > ⚠️ Next.js 15 的 dev 与 build 共用 `.next`：**跑 `npm run build` 前先停掉 `npm run dev`**，否则会出现 `routes-manifest.json` 缺失类报错；遇到时 `Remove-Item -Recurse -Force .next` 后重来即可。

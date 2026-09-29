@@ -49,7 +49,7 @@ export default function DashboardCharts({ tradeDist, freshDist }: DashboardChart
       </Card>
       <Card className="p-4">
         <h3 className="mb-1 font-black">⚡ 新鲜度分布</h3>
-        <p className="mb-2 text-[11px] text-stone-400">越新越多，说明流转健康</p>
+        <p className="mb-2 text-[11px] text-stone-400">同样按当前已加载物品聚合，越新越多说明流转健康</p>
         <div className="h-56">
           <ResponsiveContainer width="100%" height="100%">
             <AreaChart data={freshDist} margin={{ top: 8, right: 8, left: -18, bottom: 0 }}>

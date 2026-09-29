@@ -2,13 +2,13 @@
 
 import { useRouter } from 'next/navigation';
 import { motion } from 'framer-motion';
-import { Check, KeyRound, Loader2, LogOut, Package, Phone, Save, ShieldCheck } from 'lucide-react';
+import { Check, KeyRound, Loader2, LogOut, Phone, Save, ShieldCheck } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { get, patch, post } from '@/lib/api';
-import { PENDING_ENDPOINTS } from '@/lib/pending';
-import { Button, Card, Input, PendingApi, SectionTitle } from '@/components/ui';
+import { Button, Card, Input, SectionTitle } from '@/components/ui';
+import { MyItemsPanel } from '@/components/MyItemsPanel';
 import type { CommunitySummary, MeResponseData } from '@/shared/types';
 
 export default function MePage() {
@@ -211,24 +211,7 @@ export default function MePage() {
           transition={{ delay: 0.08 }}
           className="space-y-3"
         >
-          <Card className="p-4">
-            <div className="mb-3 flex items-center gap-2 text-sm font-black">
-              <Package size={16} className="text-emerald-600" /> 我的发布
-            </div>
-            <PendingApi
-              endpoint={PENDING_ENDPOINTS.myItems}
-              section="§6"
-              note={
-                <>
-                  本面板需要「按发布者过滤」的列表接口。现有{' '}
-                  <code className="font-mono text-[11px]">GET /api/items</code>{' '}
-                  只按会话社区作用域返回、不接受{' '}
-                  <code className="font-mono text-[11px]">ownerId</code>
-                  ，所以这里不猜、也不显示「还没有发布物品」—— 那会对确实有在架物品的用户报假事实。
-                </>
-              }
-            />
-          </Card>
+          <MyItemsPanel />
         </motion.div>
       </div>
 

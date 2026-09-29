@@ -3,9 +3,11 @@
 import { AnimatePresence, motion } from 'framer-motion';
 import { Bot, Loader2, Send, Sparkles, TrendingUp, Wand2 } from 'lucide-react';
 import { useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { post } from '@/lib/api';
 import { Badge, Button, Textarea } from './ui';
+import { messageBoardKey } from './MessageBoard';
 import type { FaqResult, PolishResult, PricingResult, TradeType } from '@/shared/types';
 
 function MetaLine({
@@ -191,6 +193,7 @@ export function PolishAssistant({ onApply }: { onApply?: (r: PolishResult) => vo
 }
 
 export function FaqAssistant({ itemId, tradeType }: { itemId: string; tradeType: TradeType }) {
+  const qc = useQueryClient();
   const [q, setQ] = useState('还在吗？');
   const [loading, setLoading] = useState(false);
   const [sending, setSending] = useState(false);
@@ -213,7 +216,10 @@ export function FaqAssistant({ itemId, tradeType }: { itemId: string; tradeType:
     if (!result) return;
     setSending(true);
     try {
-      await post(`/api/items/${itemId}/messages`, { content: result.answer });
+      // senderType='AI' 不可省略：服务端据此强制 authorId=null，前端才能把它标成「AI 建议」。
+      // 若按默认 USER 投递，机器生成的回复会被读成发布者本人的话。
+      await post(`/api/items/${itemId}/messages`, { content: result.answer, senderType: 'AI' });
+      await qc.invalidateQueries({ queryKey: messageBoardKey(itemId) });
       toast.success('已发送到留言板 🤖');
       setResult(null);
     } catch (e) {

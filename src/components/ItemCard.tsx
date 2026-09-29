@@ -5,7 +5,6 @@ import { Heart, MessageCircle, Send } from 'lucide-react';
 import { useState } from 'react';
 import { cn } from '@/lib/cn';
 import { formatAgeHours, formatPrice, freshnessStyle, TRADE_TYPE_LABEL } from '@/lib/format';
-import { PENDING_ENDPOINTS } from '@/lib/pending';
 import { Badge } from './ui';
 import type { ItemDto } from '@/shared/types';
 
@@ -55,12 +54,13 @@ export function ItemCard({ item }: { item: ItemDto }) {
           <Badge className={freshnessStyle(item.freshness.code)}>{item.freshness.label}</Badge>
         </div>
         {/*
-          收藏的读写接口（契约 §6）尚未实现，因此这里不可点：
-          与其让每张卡点击后弹一条失败 toast，不如明确标成未就位。
+          列表 DTO（`ItemDto`）不带 `viewer`，卡片无从知道当前用户是否已收藏，
+          所以这里只是一个装饰位，收藏动作在详情页完成（那里有 `viewer.isFavorite`）。
+          在卡片上放一个可点的心形，等于承诺一个刷新就会失忆的状态。
         */}
         <span
           aria-hidden
-          title={`收藏待联调 · ${PENDING_ENDPOINTS.favorite}`}
+          title="收藏请在物品详情页操作"
           className="absolute right-3 top-3 grid h-9 w-9 place-items-center rounded-full bg-white/85 text-stone-400"
         >
           <Heart size={17} />

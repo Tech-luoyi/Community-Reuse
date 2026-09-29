@@ -1,4 +1,4 @@
-import type { FreshnessCode, TradeType } from '@/shared/types';
+import type { FreshnessCode, ItemStatus, TradeType } from '@/shared/types';
 
 export const TRADE_TYPE_LABEL: Record<TradeType, string> = {
   FREE: '免费送',
@@ -12,6 +12,12 @@ export const TRADE_TYPE_EMOJI: Record<TradeType, string> = {
   PAY_WHATEVER: '☕',
   FIXED_PRICE: '💰',
   OTHER: '💬',
+};
+
+export const ITEM_STATUS_LABEL: Record<ItemStatus, string> = {
+  ACTIVE: '在架',
+  RESERVED: '待面交',
+  ARCHIVED: '已送出',
 };
 
 export function formatPrice(price: number | null, tradeType: TradeType): string {
