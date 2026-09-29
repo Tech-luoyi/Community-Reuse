@@ -314,6 +314,7 @@
 
 > 统一入口 `/api/ai/*`；均为 `POST`、需 `MEMBER` 权限。响应恒含 `degraded:boolean`、`source:'llm'|'rule'|'cache'`、`usedTools:boolean`、`toolCalls:number`；**降级不是错误**，HTTP 仍 200。
 > **INC-1 增量**：`usedTools` / `toolCalls` 为新增字段；**`source` 取值不变**（仍三值）。请求体形状**不变**（无需前端改造即可继续调用；`usedTools/toolCalls` 为只增字段，前端可选消费）。
+> **INC-2 增量（本次）**：响应体字段**零改动**——`usedTools` / `toolCalls` 从「恒 `false`/`0` 的占位」变为**真实值**（定价 agent 会真的查库）。新增的是**表示层协商**而非契约形状，见 §8.2。`/api/ai/pricing` 的 `usedTools` 语义含「模型 function-call 触发」与「服务端预取触发」两种，二者对客户端**等价**（都代表输出消费了真实社区数据）；区分方式留在服务端结构化日志 `toolMode`，**不进契约**。
 
 | Method | Path | 请求 | 响应 | 错误 |
 |---|---|---|---|---|
@@ -372,6 +373,34 @@
 **时间预算**：每轮模型 ≤6s、工具 ≤1s、**全局硬闸 20s**（最坏路径 = 3 轮模型 + 1 次工具 = 19s ≤ 20s；超时即 `FALLBACK`）。前端应处理最长 ~20s 的等待（典型 3–7s；建议 inline loading + 可取消）。
 
 ---
+
+### 8.2 过程事件流式（INC-2 表示层协商）
+
+三个 `/api/ai/*` 端点支持按 `Accept` 头协商**两种表示**，**契约形状完全相同**，仅投递方式不同：
+
+| `Accept` | 响应 | 用途 |
+|---|---|---|
+| 缺省 / `application/json` | `200 { data: <XxxResult> }` 整包 JSON | **服务端默认表示**；单测与集成测试一律走此路径 |
+| `text/event-stream` | `200` + `Content-Type: text/event-stream`，SSE 事件流 | 前端进度态；长请求（典型 11–18s、最坏 45s）期间可见进展 |
+
+流式事件序列：
+
+```
+event: state    data: {"state":"TOOL_EXEC","attempt":1,"tool":"getCommunitySettlementStats","latencyMs":38}
+event: state    data: {"state":"VALIDATE","attempt":2,"ok":true,"latencyMs":6120}
+event: result   data: {"data":{ ...与整包 JSON 逐字节相同的契约体... }}
+```
+
+**四条硬规则**：
+
+1. **`state` 事件不承载契约**——它只是可观测性，客户端**必须**能在完全忽略它的情况下工作。
+2. **`result` 事件恰好一个、且是最后一个**，其 `data` 与非流式表示**逐字节同构**。
+3. **R1 不退化**：降级发生时，`result` 携带的仍是完整的 `degraded:true` 规则结果。因此**流式过程中不得提前吐出结果体片段**——否则中途 `REPAIR` 失败或 deadline 耗尽时，已发出的内容无法收回，契约将自相矛盾。
+4. 错误（`INVALID_INPUT` / `RATE_LIMITED` / `NOT_FOUND` / `FORBIDDEN`）在**首个模型调用之前**即可判定，此时**直接返回对应 HTTP 状态码的整包错误信封，不进入事件流**。
+
+> **为什么不上 WebSocket**：SSE 复用同一 POST 端点与同一套鉴权/限流/租户守卫，不新增路由、不破 §10 的 D8 解耦；`EventSource` 不适用（不支持 POST + JSON body），前端用 `fetch` + `ReadableStream`，可带 `credentials:'include'`。
+>
+> **部署注意**：宿主需允许长请求（最坏 45s）。托管平台的 HTTP 上限普遍为 10–60s，部署时须把服务端 `TOTAL_DEADLINE_MS` 设为宿主上限的 80%，否则会出现「客户端已断连、服务端仍在跑」的错配。
 
 ## 9. 健康检查
 
