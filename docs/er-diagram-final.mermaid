@@ -117,7 +117,7 @@ erDiagram
     ItemEmbedding {
         string itemId PK_FK "-> Item.id, ON DELETE CASCADE"
         string communityId "冗余自 Item(有 CHECK 保证一致)"
-        vector embedding "vector(1536) pgvector 类型"
+        vector embedding "vector(1024) pgvector 类型"
         string contentHash "语料哈希,幂等重算依据"
         datetime createdAt
         datetime updatedAt "raw 写入须显式赋值(§6.7.1 P5)"

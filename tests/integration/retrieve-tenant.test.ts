@@ -43,9 +43,10 @@ const createdItemIds: string[] = [];
  * 断言也就跟着碰运气。这里用 `cos(θ)·e0 + sin(θ)·e1`，余弦距离 = `1 - cos(θ)`，
  * 远近完全由 θ 决定，可复现也可读。
  *
- * 维度必须等于列宽 1536（迁移 0003 把维度钉死，见那里的「为什么维度写死在列宽里」）。
+ * 维度必须等于列宽 1024（迁移 0003 把维度钉死在列宽里，0004 随 bge-m3 改成 1024；
+ * 见 0003 头注的「为什么维度写死在列宽里」）。
  */
-const FAKE_DIM = 1536;
+const FAKE_DIM = 1024;
 
 /** θ=0 与查询向量重合；甲区取较大的 θ，乙区取接近 0 的 θ。 */
 // 语料是 `name\ncategory\ndescription` 的多行文本，所以按行锚定（m 标志），
@@ -248,7 +249,7 @@ describe.skipIf(!prereq.ready)('search_similar_items（真连库 · 跨租户）
       { id: createdItemIds[0] ?? '', name: '维度测试', description: 'x', category: null },
       wrongDim,
     );
-    // 列宽 1536，给 3 维必然被拒；这里只要求「不静默成功」
+    // 列宽 1024，给 3 维必然被拒；这里只要求「不静默成功」
     expect(outcome.status).not.toBe('indexed');
   });
 

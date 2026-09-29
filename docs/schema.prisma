@@ -162,7 +162,7 @@ model ItemEmbedding {
   communityId String
   /// pgvector 类型，Prisma 无法读写 —— 对本表的增删查**全部**走 $executeRaw / $queryRaw。
   /// 维度写死在列宽里：换 embedding 模型 = 一次新迁移 + 全量回填，不做成运行时可变。
-  embedding   Unsupported("vector(1536)")?
+  embedding   Unsupported("vector(1024)")?
   /// 语料规范化后的哈希；文本未变则跳过重算（§6.5.10 幂等）。
   contentHash String
   createdAt   DateTime                     @default(now())

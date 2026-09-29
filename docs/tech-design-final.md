@@ -764,11 +764,17 @@ env 驱动，OpenAI 兼容协议实现，**运行时可替换**（含替换为�
 ```
 EMBEDDING_BASE_URL=…      # 代理/中转地址，与 LLM_BASE_URL 相互独立
 EMBEDDING_API_KEY=…
-EMBEDDING_MODEL=text-embedding-3-small
-EMBEDDING_DIM=1536
+EMBEDDING_MODEL=BAAI/bge-m3     # 实测口径：多语言、中文强，1024 维
+EMBEDDING_DIM=1024              # 必须等于迁移里的列宽（0003 建 1536 → 0004 改 1024）
 ```
 
-**维度纪律（重要取舍）**：`EMBEDDING_DIM` **进迁移、不进运行时**。即 `ItemEmbedding.embedding vector(<DIM>)` 的 `<DIM>` 在建表时由迁移写入固定值，运行期改 env **不会**改变列宽。理由：若维度在运行时可读，换模型会导致「写入 1536、查询 1024」的静默错位。**换 embedding 模型 = 一次新迁移 + 全量回填**，把不可见故障换成显式施工成本。
+**维度纪律（重要取舍）**：`EMBEDDING_DIM` **进迁移、不进运行时**。即 `ItemEmbedding.embedding vector(<DIM>)` 的 `<DIM>` 在建表时由迁移写入固定值，运行期改 env **不会**改变列宽。理由：若维度在运行时可读，换模型会导致「写入维度与查询维度不一致」的静默错位。**换 embedding 模型 = 一次新迁移 + 全量回填**，把不可见故障换成显式施工成本。
+
+> 这条纪律在换成 bge-m3 时走了一遍完整流程（迁移 `0004`）：供应商实测返回 1024 维，
+> 而 `embeddings.ts` 按 `EMBEDDING_DIM` 硬校验长度、列宽又是 1536，于是 `db:embed` 对 7 件物品
+> **7 条全部失败并给出准确归因**（「向量维度不符：第 0 条长度 1024，列宽 1536」）——
+> 故障是**响亮**的，不是静默写坏语料。修法即本节说的三件配套事：改列宽、改 `EMBEDDING_DIM`、全量回填。
+> 另注意 pgvector 的 HNSW/IVFFlat **索引上限 2000 维**，选模型时别越线（如 `text-embedding-3-large` 的 3072）。
 
 **表结构**（迁移 `0003`）：
 
@@ -778,7 +784,7 @@ CREATE EXTENSION IF NOT EXISTS vector;
 CREATE TABLE "ItemEmbedding" (
   "itemId"      TEXT        PRIMARY KEY,
   "communityId" TEXT        NOT NULL,          -- 冗余但必需：检索按它过滤（§6.5.6 第 6 条）
-  "embedding"   vector(1536) NOT NULL,
+  "embedding"   vector(1024) NOT NULL,   -- 迁移 0003 建的是 1536，0004 随 bge-m3 改为 1024
   "contentHash" TEXT        NOT NULL,          -- 幂等：文本未变则不重算
   "createdAt"   TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
   "updatedAt"   TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -790,7 +796,7 @@ CREATE INDEX ON "ItemEmbedding" ("communityId");
 ```
 
 > ⚠️ **本表是全仓唯一必须 raw SQL 写入的含时间戳表**，§4.3② / §6.7.1 P5 在这里**无法照字面执行**：
-> pgvector 的 `vector` 在 Prisma 只能声明为 `Unsupported("vector(1536)")`，客户端**读不到也写不进**
+> pgvector 的 `vector` 在 Prisma 只能声明为 `Unsupported("vector(1024)")`，客户端**读不到也写不进**
 > 该列（初稿那句"其写入必须经 Prisma Client，不得 raw INSERT"是做不到的，实测已推翻）。
 > 替代纪律写在 `src/server/ai/index-pipeline.ts` 头注里：① 该模块是唯一写入口；② raw UPSERT 里
 > 显式 `"updatedAt" = now()`；③ 社区指纹已纳入本表 `(count, max("updatedAt"))`，所以"有没有推进"

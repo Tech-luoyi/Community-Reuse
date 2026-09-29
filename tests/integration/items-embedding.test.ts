@@ -109,15 +109,16 @@ describe('发布 / 编辑触发语义索引（真连库）', () => {
     holder.texts.length = 0;
     holder.failing = false;
     holder.provider = {
-      model: 'fake-1536',
-      dim: 1536,
+      model: 'fake-1024',
+      dim: 1024,
       embed: async (texts) => {
         holder.texts.push(...texts);
         if (holder.failing) {
           throw new Error('嵌入服务不可用');
         }
-        // 固定形状的 1536 维向量：本文件验的是**写路径有没有被接上**，不是语义质量。
-        return texts.map(() => Array.from({ length: 1536 }, (_, i) => (i % 7) / 7));
+        // 固定形状的 1024 维向量（= 迁移 0004 的列宽）：本文件验的是**写路径有没有被接上**，
+        // 不是语义质量。维度对不上时 PG 会在 insert 处直接拒掉，所以这里的长度是断言的一部分。
+        return texts.map(() => Array.from({ length: 1024 }, (_, i) => (i % 7) / 7));
       },
     };
   });
@@ -161,8 +162,8 @@ describe('发布 / 编辑触发语义索引（真连库）', () => {
     const row = await waitForVector(item.id, corpusOf(name, '九成新，附带锅', '厨房小家电'));
     expect(row).not.toBeNull();
     expect(row?.communityId).toBe(fx.communityAId);
-    // 列宽真被满足（1536 个分量 ⇒ 1535 个逗号）——维度错位是在 PG 侧炸的，不是在这里猜的。
-    expect(row?.embedding.split(',')).toHaveLength(1536);
+    // 列宽真被满足（1024 个分量 ⇒ 1023 个逗号）——维度错位是在 PG 侧炸的，不是在这里猜的。
+    expect(row?.embedding.split(',')).toHaveLength(1024);
   });
 
   it('改文案触发重算：哈希推进到语料的新值', async () => {
