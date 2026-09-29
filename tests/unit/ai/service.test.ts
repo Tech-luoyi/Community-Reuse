@@ -47,8 +47,21 @@ import { generateFaq, generatePricing, generatePolish } from '@/server/ai/servic
 
 const VIEWER = { id: 'u1', nickname: 'n', contactText: null, currentCommunityId: 'c1' };
 
+/**
+ * 构造一个**形状接近真实 `Response`** 的桩。
+ *
+ * 曾经这里只给了 `{ status, json }`，而 `gateway.attemptTurnOnce` 在 4xx/5xx 分支会去读
+ * `response.text()`（为了把上游的真实报错带进 `detail`）——`text` 缺失时抛出的 TypeError
+ * 漏到外层 catch，被归因成 `network`，而 `network` 是**可重试**的。
+ * 于是「4xx 不重试」这条不变量被一个不完整的桩测成了「重试 2 次」。
+ * 教训：桩必须和被测代码真正使用的接口对齐，否则测的是桩的缺陷。
+ */
 function jsonResponse(status: number, body: unknown): Response {
-  return { status, json: async () => body } as unknown as Response;
+  return {
+    status,
+    json: async () => body,
+    text: async () => JSON.stringify(body),
+  } as unknown as Response;
 }
 
 function contentResponse(content: string): Response {
@@ -191,16 +204,18 @@ describe('ai.service：定价/润色/FAQ 编排', () => {
 
   it('FAQ：命中物品与社区后，合法模型输出 ⇒ source=llm', async () => {
     vi.stubEnv('LLM_API_KEY', 'k');
+    // 描述现在由 `requireOwner` 的**同一次读取**带出（GuardedItem.description），
+    // 服务层不再为了拿描述二次查同一行。
     mocks.loadItem.mockResolvedValue({
       id: 'item1',
       ownerId: 'o1',
       communityId: 'c1',
       name: '婴儿车',
+      description: '九成新',
       status: 'ACTIVE',
       tradeType: 'FREE',
       price: null,
     });
-    mocks.itemFindUnique.mockResolvedValue({ description: '九成新' });
     mocks.communityFindUnique.mockResolvedValue({ name: '阳光小区' });
     fetchMock.mockResolvedValue(
       contentResponse(JSON.stringify({ answer: '在的，随时可约自提～', confidence: 0.86 })),
@@ -214,6 +229,8 @@ describe('ai.service：定价/润色/FAQ 编排', () => {
       toolCalls: 0,
     });
     expect(result.confidence).toBeCloseTo(0.86);
+    // 回归：物品只查一次，描述不额外往返。
+    expect(mocks.itemFindUnique).not.toHaveBeenCalled();
   });
 
   it('FAQ：无 Key ⇒ 规则降级且不含社区外信息（用社区名兜底文案）', async () => {
@@ -223,11 +240,11 @@ describe('ai.service：定价/润色/FAQ 编排', () => {
       ownerId: 'o1',
       communityId: 'c1',
       name: '婴儿车',
+      description: '九成新',
       status: 'ACTIVE',
       tradeType: 'FREE',
       price: null,
     });
-    mocks.itemFindUnique.mockResolvedValue({ description: '九成新' });
     mocks.communityFindUnique.mockResolvedValue({ name: '阳光小区' });
 
     const result = await generateFaq(VIEWER, { itemId: 'item1', question: '可以自提吗' });

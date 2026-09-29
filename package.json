@@ -28,7 +28,7 @@
     "db:seed": "tsx prisma/seed.ts",
     "ai:setup-checkpoint": "tsx --env-file-if-exists=.env prisma/setup-checkpoint.ts",
     "db:embed": "tsx --env-file-if-exists=.env prisma/embed-backfill.ts",
-    "prepare": "husky || true"
+    "prepare": "husky"
   },
   "dependencies": {
     "@hookform/resolvers": "^5.9.1",

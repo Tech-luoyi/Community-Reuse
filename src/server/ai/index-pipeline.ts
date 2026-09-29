@@ -20,6 +20,7 @@
 import type { EmbeddingProvider } from './embeddings';
 import { contentHash, itemCorpusText } from './embeddings';
 import { prisma } from '@/server/db';
+import { log } from '@/server/logger';
 
 /** 单件物品的索引结果，供调用方记日志与回填脚本统计。 */
 export type IndexOutcome =
@@ -134,9 +135,10 @@ export async function unindexItem(itemId: string): Promise<void> {
 export function indexAfterCommit(item: IndexableItem, provider: EmbeddingProvider | null): void {
   void indexItem(item, provider).then((outcome) => {
     if (outcome.status === 'failed') {
-      console.warn(
-        JSON.stringify({ msg: '[ai.index] failed', itemId: item.id, reason: outcome.reason }),
-      );
+      log.warn('[ai.index] 语义索引失败（不影响主流程）', {
+        itemId: item.id,
+        reason: outcome.reason,
+      });
     }
   });
 }

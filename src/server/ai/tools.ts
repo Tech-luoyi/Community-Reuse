@@ -101,23 +101,27 @@ export class ToolUnavailableError extends Error {
 
 /**
  * Prisma 对 `numeric` 列返回 `Decimal`、对 `float8`/`int4` 返回 `number`（§6.5.4 实测表）。
- * 只有 `min` / `max` 需要显式数值化；`p25/median/p75` 已是 `number`。
+ *
+ * **刻意不做取整**：`price` 列是 `Decimal(10,2)`，`percentile_cont` 返回的
+ * `p25/median/p75` 是 `float8`。这里曾对每个值 `Math.round`，后果是
+ * 「本小区成交价中位数 19.99」被报成 20、p25 之类的小数被抹平——
+ * 统计口径失真却完全不报错，而定价建议直接消费这些数字。精度必须原样透传。
  */
 function toNumberOrNull(value: unknown): number | null {
   if (value === null || value === undefined) {
     return null;
   }
   if (typeof value === 'number') {
-    return Number.isFinite(value) ? Math.round(value) : null;
+    return Number.isFinite(value) ? value : null;
   }
   if (typeof value === 'string' || typeof value === 'bigint') {
     const n = Number(value);
-    return Number.isFinite(n) ? Math.round(n) : null;
+    return Number.isFinite(n) ? n : null;
   }
   // Prisma.Decimal：结构上有 toNumber()。
   if (typeof (value as { toNumber?: unknown }).toNumber === 'function') {
     const n = (value as { toNumber: () => number }).toNumber();
-    return Number.isFinite(n) ? Math.round(n) : null;
+    return Number.isFinite(n) ? n : null;
   }
   return null;
 }
@@ -140,7 +144,16 @@ function tenantWhere(communityId: string, args: SettlementStatsArgs): Prisma.Sql
   `;
 }
 
-/** 给一次异步操作加**墙钟**上限。 */
+/**
+ * 给一次异步操作加**墙钟**上限。
+ *
+ * ⚠️ **已知限制（诚实标注，不假装解决）**：`Promise.race` 只是**放弃等待**，
+ * 底层查询**不会被取消**——超时后 SQL 仍在 PG 里跑完，继续占用连接池。
+ * Prisma 5 的 `$queryRaw` 不接受 `AbortSignal`，所以在本层无法真正取消；
+ * 要根治只能把这两个查询改走 `pg` 驱动（`query_timeout`）或给连接串加
+ * `statement_timeout`（见 `docs/tech-design-final.md` §6.6.4 的部署建议）。
+ * 因此超时值取得偏紧（1.5s），把「放弃等待后仍在烧连接」的窗口压到最小。
+ */
 async function withTimeout<T>(work: Promise<T>, ms: number): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const guard = new Promise<never>((_resolve, reject) => {

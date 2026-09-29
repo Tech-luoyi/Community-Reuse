@@ -79,12 +79,19 @@ export function assertCurrentCommunity(viewer: Viewer, communityId: string): voi
   }
 }
 
-/** 经守卫加载的当前社区内的物品（含改价不变式所需的 tradeType / price；name 供通知文案）。 */
+/** 经守卫加载的当前社区内的物品（含改价不变式所需的 tradeType / price；name / description 供通知文案与 prompt）。 */
 export interface GuardedItem {
   id: string;
   ownerId: string;
   communityId: string;
   name: string;
+  /**
+   * 物品描述。**刻意包含在守卫的同一次读取里**：FAQ 的 prompt 需要它，若守卫只返回
+   * 骨架字段，调用方就得为拿描述再查一次同一行——那既多一次往返，又让「授权校验读的行」
+   * 与「实际使用的描述」不是同一份快照（TOCTOU）。描述是 2000 字符的 VarChar，
+   * 随行一起取回的成本可以忽略。
+   */
+  description: string;
   status: ItemStatus;
   tradeType: TradeType;
   price: Prisma.Decimal | null;
@@ -102,6 +109,7 @@ export async function loadItemInCurrentCommunity(
       ownerId: true,
       communityId: true,
       name: true,
+      description: true,
       status: true,
       tradeType: true,
       price: true,

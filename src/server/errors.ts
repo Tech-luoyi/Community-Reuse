@@ -8,6 +8,8 @@ import { ZodError } from 'zod';
 
 import type { ErrorBody, ErrorCode, ErrorDetail } from '@/shared/schemas';
 
+import { log } from './logger';
+
 /** 错误码 → HTTP 状态码（与 api-contract.md §0.2 完全一致）。 */
 export const ERROR_HTTP_STATUS: Record<ErrorCode, number> = {
   INVALID_INPUT: 400,
@@ -74,15 +76,35 @@ export function isAppError(value: unknown): value is AppError {
   return value instanceof AppError;
 }
 
-/** 任何 unknown 错误 → AppError（未知错误收敛为 INTERNAL）。 */
-export function normalizeError(value: unknown): AppError {
+/** 对外暴露的 `INTERNAL` 通用文案。**刻意不含任何内部细节**（见 `normalizeError`）。 */
+export const INTERNAL_MESSAGE = '服务器内部错误';
+
+/**
+ * 未知错误 → **对外脱敏**的 `INTERNAL`，同时**在服务端留痕**。
+ *
+ * 这里曾直接 `new AppError('INTERNAL', value.message)`，等于把 Prisma / PG 的报错原文
+ * （含表名列名、约束名、偶发的连接串片段）塞进 HTTP 响应体——既是信息泄漏，也让
+ * 「线上到底哪条 SQL 炸了」无从查起，因为服务端一行日志都没打。
+ *
+ * 现在：客户端只拿到 `INTERNAL_MESSAGE`（契约 §0.2 只约束错误码，不约束文案），
+ * 原始错误进 `log.error`，由请求关联 ID 串起来。
+ *
+ * @param context 归因信息（路由名 / 动作）：进日志，但**不进响应**。
+ */
+export function normalizeError(value: unknown, context?: Record<string, unknown>): AppError {
   if (isAppError(value)) {
     return value;
   }
   if (value instanceof ZodError) {
     return fromZodError(value);
   }
-  return errors.internal(value instanceof Error ? value.message : '未知错误');
+  log.error('未归因的异常，已收敛为 INTERNAL', {
+    ...context,
+    errorName: value instanceof Error ? value.name : typeof value,
+    errorMessage: value instanceof Error ? value.message : String(value),
+    stack: value instanceof Error ? value.stack : undefined,
+  });
+  return errors.internal(INTERNAL_MESSAGE);
 }
 
 /** AppError → 契约失败信封。 */

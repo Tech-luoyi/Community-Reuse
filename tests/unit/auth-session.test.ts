@@ -5,8 +5,11 @@
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
+import { createHmac } from 'node:crypto';
+
 import {
   SESSION_COOKIE_NAME,
+  SESSION_MAX_AGE_SECONDS,
   createSessionToken,
   getSessionFromRequest,
   readCookie,
@@ -106,5 +109,48 @@ describe('session：Cookie 读取', () => {
       headers: { cookie: `${SESSION_COOKIE_NAME}=${token}X` },
     });
     expect(getSessionFromRequest(request)).toBeNull();
+  });
+
+  describe('令牌自带过期时刻（exp）', () => {
+    const NOW = 1_700_000_000_000;
+
+    it('未过期 ⇒ 正常解析，且返回的会话数据**不含 exp**（exp 属令牌层）', () => {
+      const token = createSessionToken({ userId: 'u_1', currentCommunityId: 'c_1' }, NOW);
+      const session = verifySessionToken(token, NOW + 1000);
+      expect(session).toEqual({ userId: 'u_1', currentCommunityId: 'c_1' });
+      expect(session).not.toHaveProperty('exp');
+    });
+
+    it('超过 SESSION_MAX_AGE_SECONDS 后 ⇒ 判为未登录', () => {
+      const token = createSessionToken({ userId: 'u_1', currentCommunityId: 'c_1' }, NOW);
+      const justBefore = NOW + SESSION_MAX_AGE_SECONDS * 1000 - 1;
+      expect(verifySessionToken(token, justBefore)).not.toBeNull();
+      // 过期那一毫秒起失效。
+      expect(verifySessionToken(token, NOW + SESSION_MAX_AGE_SECONDS * 1000)).toBeNull();
+    });
+
+    it('exp 被改大也救不回来：签名不再匹配 ⇒ null', () => {
+      const token = createSessionToken({ userId: 'u_1', currentCommunityId: 'c_1' }, NOW);
+      const [payload, signature] = token.split('.');
+      const decoded = JSON.parse(Buffer.from(payload ?? '', 'base64url').toString('utf8')) as {
+        exp: number;
+      };
+      const forged = Buffer.from(
+        JSON.stringify({ ...decoded, exp: decoded.exp + 10 * 365 * 24 * 3600 }),
+        'utf8',
+      ).toString('base64url');
+      expect(verifySessionToken(`${forged}.${signature ?? ''}`, NOW)).toBeNull();
+    });
+
+    it('载荷缺 exp（旧格式令牌）⇒ 判为未登录，不做向后兼容放行', () => {
+      const legacy = Buffer.from(
+        JSON.stringify({ userId: 'u_1', currentCommunityId: 'c_1' }),
+        'utf8',
+      ).toString('base64url');
+      const signature = createHmac('sha256', process.env.SESSION_SECRET ?? '')
+        .update(legacy)
+        .digest('base64url');
+      expect(verifySessionToken(`${legacy}.${signature}`, NOW)).toBeNull();
+    });
   });
 });

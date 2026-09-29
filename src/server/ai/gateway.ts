@@ -6,8 +6,8 @@
  * 设计要点：
  *   - **供应商**：OpenAI 兼容；`LLM_BASE_URL`（默认 DeepSeek）+ `LLM_MODEL`（默认 `deepseek-chat`），零代码切换。
  *   - **认证**：`LLM_API_KEY`；**缺失即直接降级** → 本函数**绝不发无效请求**（返回 `no_key`）。
- *   - **超时**：每轮模型 ≤ `MODEL_ROUND_TIMEOUT_MS=6000`，用 `AbortController` 实现；调用方可用
- *     `timeoutMs` 覆盖（测试用）。
+ *   - **超时**：每轮模型 ≤ `MODEL_ROUND_CAP_MS`（见 `budget.ts`，默认 22000），用 `AbortController` 实现；
+ *     调用方可用 `timeoutMs` 覆盖（测试用）。
  *   - **重试**：仅对「网络错误 / 5xx / 超时」**重试 1 次**（退避 `RETRY_BACKOFF_MS=300`）；4xx **不重试**。
  *   - **输出约束**：`response_format:{type:'json_object'}` + `stream:false`（整块 JSON）；调用方再做
  *     `JSON.parse` + Zod 校验（本模块只负责"把内容取回来"）。
@@ -16,22 +16,28 @@
  */
 import type { AiKind } from '@/shared/types';
 
+import { MODEL_ROUND_CAP_MS } from './budget';
+
+/** 可重试故障的退避时长。 */
+export const RETRY_BACKOFF_MS = 300;
+
 /**
- * 每轮模型调用的超时上限（§6.6.3 基线 6000）。
+ * 单轮超时默认值。
+ *
+ * **唯一事实源是 `budget.MODEL_ROUND_CAP_MS`**（同样由 `LLM_TIMEOUT_MS` 决定）。
+ * 这里曾经另有一份 6000 的默认值，于是同一个环境变量有三个数：`.env.example` 6000、
+ * 本文件 6000、`budget` 22000。而 `budget` 的实测记录表明带工具单轮可达 20.7s——
+ * 照 `.env.example` 配会把 agent 主路径稳定掐死并降级。
+ */
+const MODEL_ROUND_TIMEOUT_MS = MODEL_ROUND_CAP_MS;
+
+/**
+ * 每轮模型调用的超时上限（§6.6.3）。
  *
  * 推理型供应商需要更宽的预算：隐藏思考链会把单轮拉长到 7–13s，6s 会稳定触发
  * 「超时 → 重试 → 再超时 → 降级」链，表现为接口很慢且永远拿不到 `source:'llm'`。
  * 用 `LLM_TIMEOUT_MS` 按供应商调，不改代码即可换档。
  */
-const MODEL_ROUND_TIMEOUT_DEFAULT = 6000;
-export const MODEL_ROUND_TIMEOUT_MS =
-  Number(process.env.LLM_TIMEOUT_MS) > 0
-    ? Number(process.env.LLM_TIMEOUT_MS)
-    : MODEL_ROUND_TIMEOUT_DEFAULT;
-/** 全局硬闸（§6.6.3；本轮无工具，供 T12 使用）。 */
-export const TOTAL_DEADLINE_MS = 20000;
-/** 可重试故障的退避时长。 */
-export const RETRY_BACKOFF_MS = 300;
 
 /**
  * 各能力的 `max_tokens`（§6.1）。
@@ -184,6 +190,21 @@ async function attemptOnce(
 }
 
 /**
+ * 「网络 / 5xx / 超时重试 1 次，4xx 与 `empty` 不重试」的唯一实现。
+ *
+ * 曾经这段退避逻辑在 `callModel` 与 `callModelTurn` 里各写一份。两份一旦漂移，
+ * 就会出现「带工具的调用重试行为和直出的不一样」这种极难归因的差异。
+ */
+async function withRetryOnce<T extends { ok: boolean }>(attempt: () => Promise<T>): Promise<T> {
+  let result = await attempt();
+  if (!result.ok && isRetryable((result as { reason?: ModelFailureReason }).reason ?? 'empty')) {
+    await sleep(RETRY_BACKOFF_MS);
+    result = await attempt();
+  }
+  return result;
+}
+
+/**
  * 调用模型（含超时与「网络/5xx/超时重试 1 次」）。
  *
  * 返回 `CallModelResult`：**不抛异常**（把故障收敛为 `reason`），由上层服务决定降级或修补，
@@ -197,21 +218,18 @@ export async function callModel(options: CallModelOptions): Promise<CallModelRes
   }
 
   const timeoutMs = options.timeoutMs ?? MODEL_ROUND_TIMEOUT_MS;
-  let result = await attemptOnce(config, options, timeoutMs);
-  if (!result.ok && isRetryable(result.reason)) {
-    await sleep(RETRY_BACKOFF_MS);
-    result = await attemptOnce(config, options, timeoutMs);
-  }
-  return result;
+  return withRetryOnce(() => attemptOnce(config, options, timeoutMs));
 }
 
 /* ========================= 工具轮次（INC-2） =========================
  *
- * `callModel` 是「一次直出 JSON」的旧形状，润色 / FAQ 继续用它，其行为与既有
- * 9 个单测逐字节一致——**不改动已验证的代码**。
- *
- * 下面的 `callModelTurn` 是 agent 图专用的扩展形状：同一套 abort / 退避 / 重试语义，
- * 但把「模型要工具」与「模型给答案」两种终态都表达出来。
+ * 本模块有**两个**调用原语，形状不同但 abort / 退避 / 重试语义完全一致：
+ *   - `callModel`    ：「一次直出 JSON」，无工具。**生产路径已不再直接使用**
+ *                      （润色 / FAQ 在 INC-2 后统一走 agent 图）——保留它是因为
+ *                      它仍是网关层最简单可测的原语，`gateway.test.ts` 9 个用例覆盖其
+ *                      归因与重试判定。若日后确认无外部价值，删它连带删测试，别留着备用。
+ *   - `callModelTurn`：agent 图专用（`graph.gatewayModelPort` 委托到这里），
+ *                      把「模型要工具」与「模型给答案」两种终态都表达出来。
  */
 
 /** 下发给模型的工具声明（OpenAI 兼容 `tools[]` 元素）。 */
@@ -312,7 +330,16 @@ async function attemptTurnOnce(
       // schema 字段不认、上下文超长），只报 `http_4xx` 等于把线上故障变成无法归因的黑洞。
       // 一并记下**实际请求的 URL**：`LLM_BASE_URL` 少写 `/v1` 会得到空响应体的 404，
       // 光看状态码完全分不清是"路径错"还是"模型无渠道"。
-      const detail = await response.text().catch(() => '');
+      //
+      // 读 body 必须**整体**包在 try 里：`response.text()` 缺失 / 抛错时若漏出去，
+      // 会被下面的 catch 归因成 `network` —— 而 `network` 是**可重试**的，
+      // 于是一个本该"4xx 不重试"的调用被重发一次，既烧钱又掩盖了真实原因。
+      let detail = '';
+      try {
+        detail = await response.text();
+      } catch {
+        detail = '';
+      }
       return {
         ok: false,
         reason: response.status >= 500 ? 'http_5xx' : 'http_4xx',
@@ -351,10 +378,5 @@ export async function callModelTurn(options: CallModelTurnOptions): Promise<Mode
   if (config === null) {
     return { ok: false, reason: 'no_key' };
   }
-  let turn = await attemptTurnOnce(config, options);
-  if (!turn.ok && isRetryable(turn.reason)) {
-    await sleep(RETRY_BACKOFF_MS);
-    turn = await attemptTurnOnce(config, options);
-  }
-  return turn;
+  return withRetryOnce(() => attemptTurnOnce(config, options));
 }

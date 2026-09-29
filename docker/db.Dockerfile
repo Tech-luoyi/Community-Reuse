@@ -24,13 +24,32 @@ FROM postgres:16-alpine
 # 固定到具体的 apk 版本与 sha256，而不是「取 latest」：
 #   - 向量列宽、索引算子名跨版本可能变，静默升级会让已建索引失效；
 #   - 这条链路依赖一个第三方 CDN 上的裸二进制，没有校验就等于把镜像内容交给运气。
-# 校验值来自 `sha256sum postgresql-pgvector-0.6.2-r0.apk`（Alpine v3.20 community/x86_64）。
-ARG PGVECTOR_APK_URL=https://dl-cdn.alpinelinux.org/alpine/v3.20/community/x86_64/postgresql-pgvector-0.6.2-r0.apk
-ARG PGVECTOR_APK_SHA256=9287f89c0a71ac3ad3e406431c329202ccdebe3bef1441b7dc0c2849ffa8e3fc
+#
+# **必须按目标架构取包**（Apple Silicon 实测教训）：本文件曾只钉 x86_64 一支，
+# 在 arm64 上构建照样「成功」——control 与 .so 都落进了目录，构建期自检查文件存在性是过的，
+# 直到 `CREATE EXTENSION vector` 才炸：
+#   could not load library ".../vector.so": unsupported relocation type 6   (SQLSTATE 58P01)
+# 即 x86_64 的 .so 装不进 arm64 的 PG。CI 的 ubuntu-latest 是 amd64、本地多为 arm64，
+# 少一支就会出现「一边能跑一边不能跑」。下面的 case 两支都钉，并在构建期比对 ELF 头兜底。
+ARG TARGETARCH
+ARG PGVECTOR_VERSION=0.6.2-r0
+# sha256 来自 `sha256sum` 对应 arch 的 apk 实测值（Alpine v3.20 community/{arch}）。
+ARG PGVECTOR_SHA_X86_64=9287f89c0a71ac3ad3e406431c329202ccdebe3bef1441b7dc0c2849ffa8e3fc
+ARG PGVECTOR_SHA_AARCH64=a4fad6ae6ce362997c2c2b163abb1e585f0d4537231662afe3e46898ca8543fe
 
 RUN set -eu; \
-  wget -q -O /tmp/pgvector.apk "$PGVECTOR_APK_URL"; \
-  echo "$PGVECTOR_APK_SHA256  /tmp/pgvector.apk" | sha256sum -c -; \
+  # TARGETARCH 由 BuildKit 注入（amd64 / arm64）；不带 BuildKit 构建时退化成宿主 `uname -m`，
+  # 对「在本机建、在本机跑」的场景同样正确。
+  arch="${TARGETARCH:-$(uname -m)}"; \
+  case "$arch" in \
+    amd64|x86_64) alpine_arch=x86_64; sha="$PGVECTOR_SHA_X86_64";; \
+    arm64|aarch64) alpine_arch=aarch64; sha="$PGVECTOR_SHA_AARCH64";; \
+    *) echo "FATAL: 没有针对 $arch 的 pgvector apk（v3.20 只有 x86_64 / aarch64 / armv7）" >&2; exit 1;; \
+  esac; \
+  url="https://dl-cdn.alpinelinux.org/alpine/v3.20/community/${alpine_arch}/postgresql-pgvector-${PGVECTOR_VERSION}.apk"; \
+  echo "[pgvector] $arch -> $alpine_arch"; \
+  wget -q -O /tmp/pgvector.apk "$url"; \
+  echo "$sha  /tmp/pgvector.apk" | sha256sum -c -; \
   mkdir -p /tmp/pgvector && cd /tmp/pgvector; \
   tar -xf /tmp/pgvector.apk; \
   # apk 内部就是 tar，解出来的路径按 Alpine 自己的布局排（postgresql16），
@@ -42,7 +61,17 @@ RUN set -eu; \
 
 # 构建期自检：控制文件与 so 都必须落在 PG16 的实际目录里，否则这个镜像是哑的。
 # 只查 control 不够——so 缺了照样 `CREATE EXTENSION` 失败，而那时已经轮到运行时才发现。
+# 再加一条 ELF e_machine 比对：文件存在但架构错位（本次踩的就是这条）同样必须当场红。
+# e_machine 是 ELF 头第 18-19 字节（小端）：3c=x86-64、b7=aarch64。busybox 的 od 不支持
+# `-j`，所以用 dd 取偏移。
 RUN set -eu; \
   test -f "$(pg_config --sharedir)/extension/vector.control"; \
   test -f "$(pg_config --pkglibdir)/vector.so"; \
-  echo "pgvector installed into $(pg_config --pkglibdir)"
+  e_machine() { dd if="$1" bs=1 skip=18 count=2 2>/dev/null | od -An -tx1 | tr -d ' \n'; }; \
+  pg_em="$(e_machine "$(which postgres)")"; \
+  vec_em="$(e_machine "$(pg_config --pkglibdir)/vector.so")"; \
+  if [ "$pg_em" != "$vec_em" ]; then \
+    echo "FATAL: vector.so 与 PG 二进制架构不一致（PG e_machine=$pg_em / vector=$vec_em）" >&2; \
+    exit 1; \
+  fi; \
+  echo "pgvector installed into $(pg_config --pkglibdir) (e_machine=$vec_em)"

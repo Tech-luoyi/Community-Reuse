@@ -40,8 +40,10 @@ describe('server/errors · 错误码 → HTTP 状态映射', () => {
     expect(isAppError(new Error('x'))).toBe(false);
   });
 
-  it('normalizeError：未知错误收敛为 INTERNAL', () => {
-    expect(normalizeError('boom').code).toBe('INTERNAL');
+  it('normalizeError：未知错误收敛为 INTERNAL（且不携带原始 message）', () => {
+    const normalized = normalizeError('boom');
+    expect(normalized.code).toBe('INTERNAL');
+    expect(normalized.message).not.toContain('boom');
     const zodError = new ZodError([]);
     expect(normalizeError(zodError).code).toBe('INVALID_INPUT');
   });
@@ -85,12 +87,15 @@ describe('server/http · 响应信封', () => {
     expect(body).toEqual({ error: { code: 'CLAIM_CONFLICT', message: '该物品已被预约' } });
   });
 
-  it('jsonError 对未知错误输出 INTERNAL / 500', async () => {
-    const response = jsonError(new Error('unexpected'));
+  it('jsonError 对未知错误输出 INTERNAL / 500，且**不泄漏内部信息**', async () => {
+    const response = jsonError(new Error('connect ECONNREFUSED 10.0.0.5:5432 (password=hunter2)'));
     expect(response.status).toBe(500);
-    await expect(response.json()).resolves.toEqual({
-      error: { code: 'INTERNAL', message: 'unexpected' },
-    });
+    const body: unknown = await response.json();
+    // 契约只约束错误码，message 必须是通用文案：内部错误原文只进服务端日志。
+    expect(body).toEqual({ error: { code: 'INTERNAL', message: '服务器内部错误' } });
+    // 关键回归：原文一个字都不许出现在响应体里。
+    expect(JSON.stringify(body)).not.toContain('ECONNREFUSED');
+    expect(JSON.stringify(body)).not.toContain('hunter2');
   });
 
   it('withRoute 捕获抛出的 AppError 并转成失败信封', async () => {

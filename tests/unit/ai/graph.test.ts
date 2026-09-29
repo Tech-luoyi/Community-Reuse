@@ -254,6 +254,71 @@ describe('ai.graph：工具链', () => {
     expect(r.meta.toolCalls).toBe(2);
     expect(r.meta.usedTools).toBe(true);
   });
+
+  it('【回归】同一轮里前一个工具成功、后一个抛错 ⇒ **已成功的结果必须留下**', async () => {
+    // 这条对着一个真实缺陷：旧实现在 catch 里直接 `return`（提前退出整个 loop），
+    // 于是本轮**已经拿到的工具结果被一起丢掉** —— `toolCalls` 不计、`usedTools:false`，
+    // 对外表现为「一次干干净净的运行」，实际却是**定价根本没吃到社区成交数据**。
+    // 症状完全静默：degraded=false、source='llm'，没有任何地方会说「数据其实没查到」。
+    const other: ToolSpec = {
+      name: 'search_similar_items',
+      description: '语义检索同类物品',
+      parameters: {
+        type: 'object',
+        properties: { query: { type: 'string' } },
+        required: ['query'],
+      },
+    };
+    const model = scripted(
+      toolCalls(['getCommunitySettlementStats', 'search_similar_items']),
+      content('{"mode":"PRICED","reason":"只吃到了成交统计"}'),
+    );
+    const r = await runAgentGraph(
+      baseSpec({
+        tools: [TOOL, other],
+        prefetchEnabled: false,
+        model: model.port,
+        executeTool: async (name) => {
+          if (name === 'search_similar_items') {
+            throw new Error('嵌入服务不可达');
+          }
+          return '<<<DATA>>>\n统计：成交 5 件\n<<<DATA>>>';
+        },
+      }),
+    );
+
+    // 成功的那次必须被计入，且整体仍走 LLM 路径（不因部分失败而降级）。
+    expect(r.meta.usedTools).toBe(true);
+    expect(r.meta.toolCalls).toBe(1);
+    expect(r.meta.degraded).toBe(false);
+    expect(r.meta.source).toBe('llm');
+  });
+
+  it('【回归】全部工具都抛错 ⇒ 不产生任何工具结果，usedTools=false 但仍不退化为规则', async () => {
+    const other: ToolSpec = {
+      name: 'search_similar_items',
+      description: '语义检索同类物品',
+      parameters: { type: 'object', properties: {}, additionalProperties: false },
+    };
+    const model = scripted(
+      toolCalls(['getCommunitySettlementStats', 'search_similar_items']),
+      content('{"mode":"PRICED","reason":"模型自己答了"}'),
+    );
+    const r = await runAgentGraph(
+      baseSpec({
+        tools: [TOOL, other],
+        model: model.port,
+        executeTool: async () => {
+          throw new Error('DB 不可达');
+        },
+      }),
+    );
+    expect(r.meta.usedTools).toBe(false);
+    expect(r.meta.toolCalls).toBe(0);
+    // R1：工具全挂也只是「没数据」，不是「降级」——模型仍拿回了答案。
+    expect(r.meta.degraded).toBe(false);
+    expect(r.output.mode).toBe('PRICED');
+  });
 });
 
 describe('ai.graph：REPAIR 与 R1', () => {

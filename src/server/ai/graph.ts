@@ -60,7 +60,15 @@ export interface ParseSchema<T> {
   safeParse(input: unknown): { success: true; data: T } | { success: false; error: unknown };
 }
 
-/** 工具执行端口：返回**已按 §6.5.6 第 5 条渲染好**的 prompt 片段。抛错即视为不可用。 */
+/**
+ * 工具执行端口：返回**已按 §6.5.6 第 5 条渲染好**的 prompt 片段。抛错即视为不可用。
+ *
+ * `rawArgs` 是模型给出的**原始 JSON 文本**（预取路径传 `'{}'`），本模块不替执行器解析：
+ * 解析 + `Zod.strict()` 剥除幻觉字段都在服务层执行器里做——那是不可信输入的唯一边界。
+ * 早先这里传的是 `parseToolArgs()` 的对象、执行器却按字符串 `JSON.parse`，
+ * 于是每次工具调用都在执行器里抛「不是合法 JSON」被 F4 摘除：类型写成 `unknown`
+ * 正好看不到这类错位，所以这里的参数类型钉成 `string`。
+ */
 export type ToolExecutor = (name: string, rawArgs: string) => Promise<string>;
 
 /** 一次图执行的输入。 */
@@ -264,22 +272,33 @@ export async function runAgentGraph<T>(
     }
     const t0 = now();
     const results: { id: string; name: string; rendered: string }[] = [];
-    let executed = 0;
+    const executedNames = new Set<string>();
+    const failedNames = new Set<string>();
+
+    // 一轮里可能有多个 tool_calls（同时下发了成交统计 + 语义检索两个工具）。
+    // 逐个执行、**逐个记账**：某个工具挂掉只摘除它自己，已经拿到手的结果必须留下。
     for (const call of turn.calls) {
       if (!s.availableTools.some((t) => t.name === call.name)) {
         continue;
       }
+      // 同一轮内同名工具只跑一次：结果按「已执行摘除、未执行保留」处理。
+      if (executedNames.has(call.name) || failedNames.has(call.name)) {
+        continue;
+      }
       const args = parseToolArgs(call.args);
       if (args === null) {
-        // 参数解析失败 ⇒ 不执行，交给 prefetch 兜底
+        // 参数不是合法 JSON ⇒ 不执行，交给 prefetch 兜底。
         continue;
       }
       try {
         const rendered = await spec.executeTool(call.name, call.args);
         results.push({ id: call.id, name: call.name, rendered });
-        executed += 1;
+        executedNames.add(call.name);
       } catch (error) {
-        // F4：工具挂了**不弃 LLM**——摘除该工具，其余仍可用，回到模型继续作答。
+        // F4：工具挂了**不弃 LLM**——摘除该工具，本轮**其余结果照常送回模型**。
+        // 注意这里是「记账后继续」，不是提前 return：早退会把本轮已成功的工具结果
+        // 一起丢掉，表现为 usedTools:false 的「干净运行」，实际是定价根本没吃到社区数据。
+        failedNames.add(call.name);
         emit({
           state: 'TOOL_EXEC',
           attempt: attempts,
@@ -288,32 +307,33 @@ export async function runAgentGraph<T>(
           ok: false,
           reason: error instanceof Error ? error.message : 'unknown',
         });
-        return {
-          availableTools: s.availableTools.filter((t) => t.name !== call.name),
-          toolRounds: s.toolRounds + 1,
-        };
       }
     }
-    if (executed === 0) {
+
+    if (results.length === 0 && failedNames.size === 0) {
+      // 全部因「未注册 / 参数非法」被跳过：没有可回报模型的进展，只推进轮次计数。
       return { toolRounds: s.toolRounds + 1 };
     }
+
     emit({
       state: 'TOOL_EXEC',
       attempt: attempts,
       latencyMs: step(now, t0),
-      toolMode: 'model',
-      ok: true,
+      ...(results.length > 0 ? { toolMode: 'model' as const } : {}),
+      ok: failedNames.size === 0,
     });
-    // **已执行过的工具从可用集里摘掉**：成交统计是幂等的（同参数同结果），
-    // 再让模型调一次只会白烧一轮（实测单轮 15s+）。P1 加进 `search_similar_items` 后，
-    // 这里按「已执行的摘除、未执行的保留」处理，而不是清空整个工具集。
-    const executedNames = new Set(results.map((r) => r.name));
+
+    // **已执行过与已失败的工具都从可用集里摘掉**：前者是幂等的（同参数同结果），
+    // 再让模型调一次只会白烧一轮（实测单轮 15s+）；后者留着必然再失败一次。
+    const removed = new Set([...executedNames, ...failedNames]);
     return {
       toolRounds: s.toolRounds + 1,
-      toolCalls: s.toolCalls + executed,
-      usedTools: true,
-      availableTools: s.availableTools.filter((t) => !executedNames.has(t.name)),
-      messages: results.map((r) => ({ role: 'user' as const, content: r.rendered })),
+      toolCalls: s.toolCalls + results.length,
+      usedTools: results.length > 0,
+      availableTools: s.availableTools.filter((t) => !removed.has(t.name)),
+      ...(results.length === 0
+        ? {}
+        : { messages: results.map((r) => ({ role: 'user' as const, content: r.rendered })) }),
     };
   };
 

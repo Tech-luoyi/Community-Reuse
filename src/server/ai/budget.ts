@@ -26,9 +26,12 @@ function positiveIntFromEnv(raw: string | undefined, fallback: number): number {
 
 /**
  * 单轮模型往返的**上限**（不是目标值）。可用 `LLM_TIMEOUT_MS` 覆盖。
- * 仅供本模块的 `roundTimeoutMs` 使用，不对外暴露。
+ *
+ * 事实源在此，**别处不再重复定义**：曾经 `gateway.ts` 另有一份同义常量
+ * （同名 `TOTAL_DEADLINE_MS`、另一个默认 20000），两个旋钮三个默认值，
+ * 而 `.env.example` 照抄的 6000 恰好会把带工具的 agent 主路径掐死。
  */
-const MODEL_ROUND_CAP_MS = positiveIntFromEnv(process.env.LLM_TIMEOUT_MS, 22_000);
+export const MODEL_ROUND_CAP_MS = positiveIntFromEnv(process.env.LLM_TIMEOUT_MS, 22_000);
 
 /** 全局硬闸。可用 `LLM_DEADLINE_MS` 覆盖；**部署到远端时应设为宿主上限的 80%**。 */
 export const TOTAL_DEADLINE_MS = positiveIntFromEnv(process.env.LLM_DEADLINE_MS, 60_000);

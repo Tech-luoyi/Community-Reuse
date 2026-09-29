@@ -86,18 +86,24 @@ interface Row {
   distance: number | null;
 }
 
+/**
+ * `price` 数值化。**不取整**：`Item.price` 是 `Decimal(10,2)`，取整会让
+ * 19.99 变成 20，而这个数字随后直接进 prompt 当作「同类物品价格锚点」——
+ * 误差不报错、也不可见。
+ */
 function priceOf(value: unknown): number | null {
   if (value === null || value === undefined) {
     return null;
   }
   if (typeof value === 'number') {
-    return Math.round(value);
+    return Number.isFinite(value) ? value : null;
   }
   if (typeof (value as { toNumber?: unknown }).toNumber === 'function') {
-    return Math.round((value as { toNumber: () => number }).toNumber());
+    const n = (value as { toNumber: () => number }).toNumber();
+    return Number.isFinite(n) ? n : null;
   }
   const n = Number(value);
-  return Number.isFinite(n) ? Math.round(n) : null;
+  return Number.isFinite(n) ? n : null;
 }
 
 /** 向量 → pgvector 的**文本**表示 `[1,2,3]`，随后作为**绑定参数**下发并在 SQL 侧 cast。 */

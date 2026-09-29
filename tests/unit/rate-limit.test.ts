@@ -69,3 +69,52 @@ describe('createRateLimiter：用户桶 / 全局桶 / 补充', () => {
     expect(() => limiter.enforce('a')).not.toThrow();
   });
 });
+
+describe('createRateLimiter：用户桶 Map 必须有界', () => {
+  it('超过 maxTrackedUsers 后按 LRU 淘汰，常驻内存不随 userId 数量增长', () => {
+    // 限流器自己不能成为攻击面：早期实现对每个见过的 userId 永久留桶，
+    // 于是「换一批 userId 反复打」就能让内存单调增长 —— 一个不需要鉴权就能触发的
+    // 内存耗尽向量。这条用例把「有界」钉成可回归的性质。
+    const limiter = createRateLimiter({
+      windowMs: 60_000,
+      userCapacity: 100,
+      globalCapacity: 100_000,
+      maxTrackedUsers: 10,
+    });
+    for (let i = 0; i < 500; i += 1) {
+      limiter.tryConsume(`user-${i}`, T0 + i);
+    }
+    expect(limiter.trackedUsers()).toBeLessThanOrEqual(10);
+  });
+
+  it('淘汰掉的是最久没被碰过的桶：活跃用户不会被踢', () => {
+    const limiter = createRateLimiter({
+      windowMs: 60_000,
+      userCapacity: 100,
+      globalCapacity: 100_000,
+      maxTrackedUsers: 3,
+    });
+    limiter.tryConsume('hot', T0);
+    for (let i = 0; i < 10; i += 1) {
+      // 每个新 userId 都在挤掉一个最旧的；'hot' 因为持续被 touch 应当留下。
+      limiter.tryConsume(`cold-${i}`, T0 + i + 1);
+      limiter.tryConsume('hot', T0 + i + 1);
+    }
+    expect(limiter.trackedUsers()).toBeLessThanOrEqual(3);
+    // 桶还在 ⇒ 容量未被重置，仍按「已消耗过」计数。
+    const before = limiter.tryConsume('hot', T0 + 100);
+    expect(before).toBe(true);
+  });
+
+  it('不配置 maxTrackedUsers 时用缺省上限（不是无界）', () => {
+    const limiter = createRateLimiter({
+      windowMs: 60_000,
+      userCapacity: 100,
+      globalCapacity: 1_000_000,
+    });
+    for (let i = 0; i < 200; i += 1) {
+      limiter.tryConsume(`u-${i}`, T0 + i);
+    }
+    expect(limiter.trackedUsers()).toBeLessThanOrEqual(50_000);
+  });
+});

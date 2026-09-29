@@ -9,14 +9,25 @@ jobs:
   verify:
     runs-on: ubuntu-latest
 
-    # PostgreSQL 16 service container：供集成测试（迁移落地 / D3 兜底 / 索引命中 / §6.5 定价 SQL）真连库使用。
+    # PostgreSQL 16 service container：供集成测试（迁移落地 / D3 兜底 / 索引命中 / §6.5 定价 SQL / §6.5.6 语义检索）真连库使用。
+    #
+    # 为什么 build 而不是 image: postgres:16-alpine：迁移 0003 需要 `CREATE EXTENSION vector`，
+    # 官方 alpine 镜像不含 pgvector，会让 deploy 直接 P3018 把整条流水线钉死。
+    # 这里复用 `docker/db.Dockerfile`（与本地开发同一镜像、同一 pgvector 0.6.2 apk），
+    # 顺带让 CI 验证这个 Dockerfile 本身仍然可构建 —— 换 `pgvector/pgvector:pg16` 会引入第二个向量来源，
+    # 版本与索引算子可能与本地不一致，测过了也不算数。
+    # TZ: UTC 与 docker-compose.yml 同步（§4.3② 时钟源不变量），丢失会让新鲜度静默偏移一个时区。
     services:
       postgres:
-        image: postgres:16-alpine
+        image: community-reuse-db:pg16-pgvector
+        build:
+          context: .
+          dockerfile: docker/db.Dockerfile
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
           POSTGRES_DB: community
+          TZ: UTC
         ports:
           - 5432:5432
         options: >-
@@ -52,6 +63,11 @@ jobs:
       - name: Unit tests
         run: npm run test
 
+      # 覆盖率门禁（vitest.config.ts 的 thresholds）：必须在这里跑，
+      # 否则阈值只是配置文件里的一行字，跌破也没人知道。
+      - name: Unit tests (coverage gate)
+        run: npm run test:coverage
+
       - name: Apply DB migrations
         run: npm run prisma:deploy
 
@@ -60,6 +76,11 @@ jobs:
 
       - name: Seed database
         run: npm run db:seed
+
+      # checkpoint 表由 LangGraph 自管、不在 Prisma schema 内（§10 DDL 归属纪律）；
+      # 集成测试会自建，但这里显式跑一次，才能证明 README 的一键启动路径真的走得通。
+      - name: Set up LangGraph checkpoint tables
+        run: npm run ai:setup-checkpoint
 
       - name: Integration tests (real PostgreSQL)
         run: npm run test:integration

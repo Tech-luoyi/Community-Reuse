@@ -4,15 +4,17 @@
  * 事实源：docs/tech-design-final.md §6.1（网关）、§6.2（prompt/schema）、§6.3（降级）、
  * §6.6.4（降级层级：`source` 与 `usedTools` 正交）；契约 docs/api-contract.md §8。
  *
- * 单条请求的**隐式流程**（T12 将把它显式化为有限状态机）：
- *   查缓存 →（未命中）调模型 → `JSON.parse` + Zod 校验 →
- *   （非法）`REPAIR` 重提示 **≤1 次** →（仍非法 / 无 Key / 超时 / 4xx）**规则降级**。
+ * **三个能力（定价 / 润色 / FAQ）共用同一张 agent 图**（`graph.runAgentGraph`），
+ * 差别只在「是否下发工具」与「预映像是否含社区指纹」，不再各写一套编排。
+ * 这条纪律的价值在于：deadline、REPAIR 次数、降级层级、可观测事件**只有一处实现**。
+ * 曾经存在过一个并行的内联编排（润色 / FAQ 专用），它没有全局 deadline、没有可观测，
+ * 于是「定价有兜底、润色没有」成了长期不一致的来源——已删除。
  *
  * 不变量：
  *   - **降级不是错误**：任何失败路径都返回可用结果，HTTP 恒 200，置 `degraded:true, source:'rule'`（R1）。
- *   - **无 Key 不发请求**：由 `gateway.callModel` 保证（`no_key` 短路）。
- *   - **响应恒含四字段** `degraded/source/usedTools/toolCalls`；本轮无工具 ⇒ `usedTools:false, toolCalls:0`
- *     （字段**必须在**，T11 再让其取真值）。
+ *   - **无 Key 不发请求**：由 `gateway.callModelTurn` 保证（`no_key` 短路）。
+ *   - **响应恒含四字段** `degraded/source/usedTools/toolCalls`；润色 / FAQ 不消费社区数据
+ *     ⇒ 恒为 `usedTools:false, toolCalls:0`。
  *   - **缓存短路**：命中即 `source:'cache'` 且**不调模型**。
  */
 import type {
@@ -31,12 +33,7 @@ import { getCheckpointer } from '@/server/ai/checkpoint';
 import { getEmbeddingConfig, getEmbeddingProvider } from '@/server/ai/embeddings';
 import { computeCommunityFingerprint, PRICING_CACHE_VARIANT } from '@/server/ai/fingerprint';
 import { fallbackFaq, fallbackPolish, fallbackPricing } from '@/server/ai/fallback';
-import {
-  type ChatMessage,
-  MODEL_MAX_TOKENS,
-  MODEL_TEMPERATURE,
-  callModel,
-} from '@/server/ai/gateway';
+import { MODEL_MAX_TOKENS, MODEL_TEMPERATURE } from '@/server/ai/gateway';
 import {
   type CachePort,
   type GraphEvent,
@@ -68,16 +65,12 @@ import {
   PRICING_SYSTEM_PROMPT,
   type PricingModelOutput,
   PricingModelOutputSchema,
-  REPAIR_INSTRUCTION,
   buildFaqUserPrompt,
   buildPolishUserPrompt,
   buildPricingUserPrompt,
 } from '@/server/ai/prompts';
 import { type Viewer, requireOwner } from '@/server/auth/guard';
 import { prisma } from '@/server/db';
-
-/** 本轮（未引入工具）的固定工具元信息；T11 会让定价档取真值。 */
-const NO_TOOLS = { usedTools: false, toolCalls: 0 } as const;
 
 /**
  * 解析器所需的最小结构化契约（避免依赖 Zod 的三参泛型 `_input/_output` 差异）。
@@ -87,99 +80,49 @@ interface ParseSchema<T> {
   safeParse(input: unknown): { success: true; data: T } | { success: false; error: unknown };
 }
 
-interface RunLlmSpec<T> {
+/**
+ * 通用编排：缓存短路 → 模型 → 校验 → REPAIR(≤1) → 降级。
+ *
+ * 润色 / FAQ 走这里：**不派工具、不开预取**（§6.5.8 的保险模式只对定价有意义），
+ * 缓存键不带作用域 ⇒ 与纯单轮调用的历史键**逐字节一致**，升级不产生一次性的缓存雪崩。
+ * deadline / REPAIR / 降级 / 观测全部由图运行时统一承担（§6.6）。
+ */
+async function runToolless<T>(spec: {
   kind: AiKind;
-  messages: ChatMessage[];
+  systemPrompt: string;
+  userPrompt: string;
   schema: ParseSchema<T>;
   maxTokens: number;
   temperature: number;
-  /** 参与缓存键的**规范化输入**（须覆盖一切影响输出的字段）。 */
   cachePayload: unknown;
-  /**
-   * 缓存键作用域（§6.5.3）。**仅定价传**：润色 / FAQ 不依赖社区数据，键必须逐字节不变。
-   */
-  cacheScope?: CacheKeyScope;
   fallback: () => T;
-}
-
-interface RunLlmResult<T> {
-  output: T;
-  meta: AiMeta;
-}
-
-/** `JSON.parse` + schema 校验；任一步失败返回 `null`（交由上层决定 REPAIR/降级）。 */
-function parseAndValidate<T>(content: string, schema: ParseSchema<T>): T | null {
-  let json: unknown;
-  try {
-    json = JSON.parse(content);
-  } catch {
-    return null;
-  }
-  const result = schema.safeParse(json);
-  return result.success ? result.data : null;
-}
-
-/**
- * 通用编排：缓存短路 → 模型 → 校验 → REPAIR(≤1) → 降级。
- */
-async function runLlm<T>(spec: RunLlmSpec<T>): Promise<RunLlmResult<T>> {
-  const key = computeCacheKey(spec.kind, spec.cachePayload, spec.cacheScope);
-
-  const cached = await getCached(spec.kind, spec.cachePayload, spec.cacheScope);
-  if (cached !== null) {
-    return {
-      output: cached.envelope.output as T,
-      meta: {
-        degraded: false,
-        source: 'cache',
-        usedTools: cached.envelope.usedTools,
-        toolCalls: cached.envelope.toolCalls,
-      },
-    };
-  }
-
-  const first = await callModel({
-    messages: spec.messages,
+  /** 观测用的短标签（不含用户输入，避免 PII 进日志）。 */
+  label: string;
+}): Promise<{ output: T; meta: AiMeta }> {
+  const observer = createObserver(spec.label);
+  const { output, meta } = await runAgentGraph<T>({
+    kind: spec.kind,
+    systemPrompt: spec.systemPrompt,
+    userPrompt: spec.userPrompt,
+    schema: spec.schema,
     maxTokens: spec.maxTokens,
     temperature: spec.temperature,
+    tools: [],
+    // 无工具 ⇒ 永不触发；抛错而不是静默返回，避免以后误开工具时无声地产出错误数据。
+    executeTool: (name) => {
+      throw new ToolUnavailableError(`本能力未注册工具：${name}`);
+    },
+    prefetchEnabled: false,
+    fallback: spec.fallback,
+    cachePayload: spec.cachePayload,
+    model: gatewayModelPort,
+    cache: scopedCachePort(spec.kind, spec.cachePayload),
+    onEvent: (event) => {
+      observer.onEvent(event);
+    },
   });
-  let output: T | null = first.ok ? parseAndValidate(first.content, spec.schema) : null;
-
-  if (output === null && first.ok) {
-    // REPAIR：把非法输出回灌为 assistant 消息 + 追加**确定性**纠正提示，重提示**恰好 1 次**。
-    const repairMessages: ChatMessage[] = [
-      ...spec.messages,
-      { role: 'assistant', content: first.content },
-      { role: 'user', content: REPAIR_INSTRUCTION },
-    ];
-    const second = await callModel({
-      messages: repairMessages,
-      maxTokens: spec.maxTokens,
-      temperature: spec.temperature,
-    });
-    output = second.ok ? parseAndValidate(second.content, spec.schema) : null;
-  }
-
-  if (output === null) {
-    // 无 Key / 超时 / 4xx / JSON 仍非法 ⇒ 确定性规则降级（degraded:true, source:'rule'）。
-    return {
-      output: spec.fallback(),
-      meta: { degraded: true, source: 'rule', ...NO_TOOLS },
-    };
-  }
-
-  await putCached(key, spec.kind, {
-    output,
-    ...NO_TOOLS,
-    // 键命名空间与指纹写进 outputJson 供事后归因（不占表结构，§6.5.3）。
-    ...(spec.cacheScope === undefined
-      ? {}
-      : {
-          variant: spec.cacheScope.variant,
-          commFp: spec.cacheScope.communityFingerprint,
-        }),
-  });
-  return { output, meta: { degraded: false, source: 'llm', ...NO_TOOLS } };
+  flushObserver(observer);
+  return { output, meta };
 }
 
 /**
@@ -298,12 +241,10 @@ export async function generatePricing(
 
 /** `POST /api/ai/polish`（§8 B）：物品描述优化。 */
 export async function generatePolish(input: PolishRequest): Promise<PolishResult> {
-  const { output, meta } = await runLlm<PolishModelOutput>({
+  const { output, meta } = await runToolless<PolishModelOutput>({
     kind: 'POLISH',
-    messages: [
-      { role: 'system', content: POLISH_SYSTEM_PROMPT },
-      { role: 'user', content: buildPolishUserPrompt(input) },
-    ],
+    systemPrompt: POLISH_SYSTEM_PROMPT,
+    userPrompt: buildPolishUserPrompt(input),
     schema: PolishModelOutputSchema,
     maxTokens: MODEL_MAX_TOKENS.POLISH,
     temperature: MODEL_TEMPERATURE.POLISH,
@@ -313,6 +254,7 @@ export async function generatePolish(input: PolishRequest): Promise<PolishResult
       tradeType: input.tradeType ?? null,
     },
     fallback: () => fallbackPolish(input),
+    label: 'polish',
   });
   return { ...meta, ...output };
 }
@@ -324,34 +266,27 @@ export async function generatePolish(input: PolishRequest): Promise<PolishResult
 export async function generateFaq(viewer: Viewer, input: FaqRequest): Promise<FaqResult> {
   // FAQ 是「卖家回复建议」：仅发布者可用（契约 §8 权限例外）。非发布者 → 403，
   // 物品不存在/跨社区 → 404（`requireOwner` 内部先做租户校验）。
+  //
+  // `GuardedItem` 已含 description：曾经这里为了拿描述**再查一次同一个 item**，
+  // 于是授权校验读的行与送进 prompt 的描述不是同一份快照（TOCTOU），且白白多一次往返。
   const item = await requireOwner(viewer, input.itemId);
-  // `GuardedItem` 不含 description；物品存在性与租户已由上面的守卫校验，这里只补取 prompt 所需的描述。
-  const detail = await prisma.item.findUnique({
-    where: { id: item.id },
-    select: { description: true },
-  });
-  const description = detail?.description ?? '';
+  const description = item.description ?? '';
   const community = await prisma.community.findUnique({
     where: { id: viewer.currentCommunityId },
     select: { name: true },
   });
   const communityName = community?.name ?? '本社区';
 
-  const { output, meta } = await runLlm<FaqModelOutput>({
+  const { output, meta } = await runToolless<FaqModelOutput>({
     kind: 'FAQ',
-    messages: [
-      { role: 'system', content: FAQ_SYSTEM_PROMPT },
-      {
-        role: 'user',
-        content: buildFaqUserPrompt({
-          name: item.name,
-          description,
-          tradeType: item.tradeType,
-          status: item.status,
-          question: input.question,
-        }),
-      },
-    ],
+    systemPrompt: FAQ_SYSTEM_PROMPT,
+    userPrompt: buildFaqUserPrompt({
+      name: item.name,
+      description,
+      tradeType: item.tradeType,
+      status: item.status,
+      question: input.question,
+    }),
     schema: FaqModelOutputSchema,
     maxTokens: MODEL_MAX_TOKENS.FAQ,
     temperature: MODEL_TEMPERATURE.FAQ,
@@ -373,6 +308,7 @@ export async function generateFaq(viewer: Viewer, input: FaqRequest): Promise<Fa
         communityName,
         question: input.question,
       }),
+    label: 'faq',
   });
   return { ...meta, ...output };
 }

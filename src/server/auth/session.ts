@@ -29,6 +29,21 @@ export const SessionDataSchema = z.object({
 });
 export type SessionData = z.infer<typeof SessionDataSchema>;
 
+/**
+ * 令牌信封 = 会话数据 + 过期时刻（**秒**，epoch）。
+ *
+ * 为什么 `exp` 必须落在**令牌里**而不是只靠 Cookie 的 `maxAge`：Cookie 的 `maxAge`
+ * 只是浏览器的服从性提示——令牌一旦被复制走（日志、代理、抓包），浏览器管不着，
+ * 签名又永远有效，等于拿到一个**永久通行证**。登出也只清 Cookie，无法吊销。
+ * 把 `exp` 签进载荷后，过期令牌在 `verifySessionToken` 就被判为未登录。
+ *
+ * 仍然是**无状态**会话（没有服务端会话表），所以「登出即吊销」做不到；
+ * 能做到的是「令牌自己会过期」。这是无状态方案的固有取舍，诚实标注于此。
+ */
+const SessionTokenSchema = SessionDataSchema.extend({
+  exp: z.number().int().positive(),
+});
+
 function resolveSecret(): string {
   const secret = process.env.SESSION_SECRET;
   if (typeof secret !== 'string' || secret.length === 0) {
@@ -46,17 +61,32 @@ function sign(payload: string): string {
   return base64Url(createHmac('sha256', resolveSecret()).update(payload).digest());
 }
 
-/** 签发会话令牌：`<payload>.<signature>`。 */
-export function createSessionToken(data: SessionData): string {
-  const payload = base64Url(JSON.stringify(data));
+/**
+ * 签发会话令牌：`<payload>.<signature>`。
+ *
+ * @param now 当前时刻（秒）。**仅测试注入**，生产用默认 `Date.now()`。
+ */
+export function createSessionToken(data: SessionData, now: number = Date.now()): string {
+  const payload = base64Url(
+    JSON.stringify({
+      userId: data.userId,
+      currentCommunityId: data.currentCommunityId,
+      exp: Math.floor(now / 1000) + SESSION_MAX_AGE_SECONDS,
+    }),
+  );
   return `${payload}.${sign(payload)}`;
 }
 
 /**
  * 校验会话令牌。
- * 任何异常（格式错 / 签名不符 / 载荷非法 / 缺密钥）一律返回 `null`（视为未登录）。
+ * 任何异常（格式错 / 签名不符 / 载荷非法 / 缺密钥 / **已过期**）一律返回 `null`（视为未登录）。
+ *
+ * @param now 当前时刻（秒）。**仅测试注入**。
  */
-export function verifySessionToken(token: string | null | undefined): SessionData | null {
+export function verifySessionToken(
+  token: string | null | undefined,
+  now: number = Date.now(),
+): SessionData | null {
   if (typeof token !== 'string' || token.length === 0) {
     return null;
   }
@@ -82,8 +112,16 @@ export function verifySessionToken(token: string | null | undefined): SessionDat
 
   try {
     const decoded = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')) as unknown;
-    const parsed = SessionDataSchema.safeParse(decoded);
-    return parsed.success ? parsed.data : null;
+    const parsed = SessionTokenSchema.safeParse(decoded);
+    if (!parsed.success) {
+      return null;
+    }
+    // 过期即未登录：`exp` 是签过名的，客户端改不了。
+    if (parsed.data.exp <= Math.floor(now / 1000)) {
+      return null;
+    }
+    // 只回会话数据本身：`exp` 属令牌层，不进 `Viewer` / `SessionData` 的语义面。
+    return { userId: parsed.data.userId, currentCommunityId: parsed.data.currentCommunityId };
   } catch {
     return null;
   }
