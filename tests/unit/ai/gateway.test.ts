@@ -9,7 +9,14 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { callModel, getGatewayConfig, hasApiKey, type ChatMessage } from '@/server/ai/gateway';
+import {
+  callModel,
+  callModelTurn,
+  getGatewayConfig,
+  hasApiKey,
+  type ChatMessage,
+  type ToolSpec,
+} from '@/server/ai/gateway';
 
 const MESSAGES: ChatMessage[] = [{ role: 'user', content: 'hi' }];
 
@@ -140,5 +147,99 @@ describe('callModel', () => {
     const result = await callModel({ messages: MESSAGES, maxTokens: 100, temperature: 0.3 });
     expect(result).toEqual({ ok: false, reason: 'empty' });
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('callModelTurn（agent 图专用）', () => {
+  let fetchMock: ReturnType<typeof vi.fn>;
+
+  const TOOL: ToolSpec = {
+    name: 'getCommunitySettlementStats',
+    description: '查询本小区成交统计',
+    parameters: { type: 'object', properties: { category: { type: 'string' } } },
+  };
+
+  beforeEach(() => {
+    fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    vi.stubEnv('LLM_API_KEY', 'k');
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+  });
+
+  it('工具按 OpenAI 线上格式下发，且不与 response_format 并存', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse(200, { choices: [{ message: { content: '{"mode":"FREE"}' } }] }),
+    );
+
+    await callModelTurn({
+      messages: MESSAGES,
+      maxTokens: 300,
+      temperature: 0.3,
+      tools: [TOOL],
+      jsonMode: true,
+      timeoutMs: 5000,
+    });
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const body = JSON.parse(init.body as string) as {
+      tools?: unknown;
+      tool_choice?: string;
+      response_format?: unknown;
+    };
+    // 裸发 ToolSpec（没有 type/function 包裹）会被真供应商 400 拒掉 —— 实测 8stoken 中转回
+    // 「Toolcall params are invalid, detail:invalid tool type」，整轮归因 http_4xx、不重试、
+    // 直接 FALLBACK：接口仍 200 但永远拿不到 LLM 结果。假模型照不出这类线上格式错位。
+    expect(body.tools).toEqual([
+      {
+        type: 'function',
+        function: {
+          name: TOOL.name,
+          description: TOOL.description,
+          parameters: TOOL.parameters,
+        },
+      },
+    ]);
+    expect(body.tool_choice).toBe('auto');
+    expect(body.response_format).toBeUndefined();
+  });
+
+  it('模型请求工具 ⇒ kind=tool_calls，args 保留**原始 JSON 文本**（解析归执行器）', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse(200, {
+        choices: [
+          {
+            message: {
+              tool_calls: [
+                {
+                  id: 'call_1',
+                  type: 'function',
+                  function: { name: TOOL.name, arguments: '{"category":"家电"}' },
+                },
+              ],
+            },
+          },
+        ],
+      }),
+    );
+
+    const turn = await callModelTurn({
+      messages: MESSAGES,
+      maxTokens: 300,
+      temperature: 0.3,
+      tools: [TOOL],
+      jsonMode: false,
+      timeoutMs: 5000,
+    });
+
+    expect(turn).toEqual({
+      ok: true,
+      kind: 'tool_calls',
+      calls: [{ id: 'call_1', name: TOOL.name, args: '{"category":"家电"}' }],
+    });
   });
 });

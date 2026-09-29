@@ -317,7 +317,23 @@ async function attemptTurnOnce(
         temperature: options.temperature,
         max_tokens: options.maxTokens,
         ...(options.tools.length > 0
-          ? { tools: options.tools, tool_choice: 'auto' }
+          ? {
+              // OpenAI 线上格式要求每个工具包一层 `{ type:'function', function:{…} }`。
+              // 直接把 `ToolSpec` 裸发出去会被供应商以 400 拒掉 —— 实测 8stoken 中转返回
+              // 「Toolcall params are invalid, detail:invalid tool type」，于是整轮归因
+              // `http_4xx`、不重试、直接 FALLBACK：接口仍 200，但**永远拿不到 LLM 结果**。
+              // 假模型测试照不出这类线上格式错位，所以 `tests/unit/ai/gateway.test.ts`
+              // 里有一条专门断言请求体形状的回归测试。
+              tools: options.tools.map((tool) => ({
+                type: 'function',
+                function: {
+                  name: tool.name,
+                  description: tool.description,
+                  parameters: tool.parameters,
+                },
+              })),
+              tool_choice: 'auto',
+            }
           : options.jsonMode
             ? { response_format: { type: 'json_object' } }
             : {}),
