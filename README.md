@@ -25,6 +25,7 @@ community-reuse/
 ├─ prisma/
 │  ├─ schema.prisma                   # ★ 事实源（10 模型 / 6 enum），与 docs/schema.prisma 逐字一致
 │  ├─ migrations/0001_init/migration.sql   # 手写迁移（enum/表/索引/外键 + D3 CHECK 约束）
+│  ├─ migrations/0002_claim_pending_unique/migration.sql   # 部分唯一索引：同用户同物品至多一条 PENDING
 │  └─ seed.ts + seed-data.ts          # 种子脚本 + 纯数据（可单测）
 ├─ src/
 │  ├─ app/                          # ★ 页面（App Router）
@@ -32,7 +33,8 @@ community-reuse/
 │  │  ├─ join/ | items/new/ | items/[id]/   # 加入 / 发布 / 详情
 │  │  ├─ dashboard/ | requests/ | favorites/ | notifications/ | me/
 │  │  └─ api/**/route.ts             # REST 接口（见 docs/api-contract.md）
-│  ├─ components/                    # UI 组件（ui / ItemCard / FilterBar / ai / ClaimPanel…）
+│  ├─ components/                    # 业务组件（ui.tsx / ItemCard / FilterBar / ai / ClaimPanel…）
+│  │  └─ ui/**                       # shadcn 基础组件（见「前端 · 基础组件」一节）
 │  ├─ hooks/                         # useQuery 封装（use-me / use-items）
 │  ├─ lib/                           # fetch 封装 + ApiError、格式化、图片压缩
 │  ├─ server/
@@ -54,6 +56,17 @@ community-reuse/
 - **页面**：`/` 发现流、`/join` 邀请码加入、`/items/new` 发布（含 AI 定价 / 润色助手、canvas WebP 图片压缩）、`/items/[id]` 详情（画廊 + 想要面板 + 公开留言板）、`/dashboard` 看板、`/requests` 申请收发、`/favorites` 收藏、`/notifications` 通知、`/me` 个人中心。
 - **诚实降级**：看板四项取自 `GET /api/stats/community` 的服务端聚合，前端不再用当前页数据冒充全量；两张分布图仍按已加载页聚合，标题即写明口径。接口调用失败一律渲染 `ErrorPanel` + 重试，**不用 `.catch(() => [])` 把「没读到」下沉成「没有数据」**——那会对确实有内容的用户报假事实。
 - **校验**：`npm run lint` → `npm run typecheck` → `npm run test` → `npm run build` 全绿。
+
+### 基础组件（shadcn 风格）
+
+`src/components/ui/**` 是 Radix + `cva` 的基础组件集（`components.json` 声明，非 CLI 生成），已实际接线：
+
+- `TooltipProvider` —— 根布局（`src/app/layout.tsx`）包裹全站；
+- `Sheet` —— 移动端把筛选项收进底部抽屉（`FilterBar`，设计文档 §6.2）；
+- `DropdownMenu` + `Avatar` —— AppShell 用户菜单（个人中心 / 通知 / 退出登录）；
+- `Toaster`（sonner）—— 与 `Providers` 里的 toast 出口一致。
+
+其语义 token（`--color-primary` / `--color-background` / `--color-border` / `--radius` 等）与 `tw-animate-css` 的出入场动画类均在 `src/app/globals.css` 定义，取值对齐 `docs/frontend-design-system.md` §3。`cn` 统一在 `src/lib/utils.ts`（`clsx + tailwind-merge`）。业务页面仍以单文件 `src/components/ui.tsx`（Button / Card / Badge…）为主，`ui/**` 作为通用扩展。
 
 > ⚠️ Next.js 15 的 dev 与 build 共用 `.next`：**跑 `npm run build` 前先停掉 `npm run dev`**，否则会出现 `routes-manifest.json` 缺失类报错；遇到时 `Remove-Item -Recurse -Force .next` 后重来即可。
 
@@ -109,16 +122,15 @@ curl -s http://localhost:3000/api/health
 
 ## 前端（阶段 0 · 基础设施）
 
-前端按 `docs/frontend-design-system.md` 与 `docs/frontend-ui-prompts.md` 执行，当前已完成：
+前端按 `docs/frontend-design-system.md` 与 `docs/frontend-ui-prompts.md` 执行，基础设施部分已完成：
 
 - Tailwind CSS v4 + PostCSS 接入；
-- shadcn/ui 初始化（`components.json`、`src/components/ui/**`）；
+- shadcn/ui 初始化（`components.json`、`src/components/ui/**`，并已接线到布局与交互，见上「基础组件」）；
 - 全局设计 token（社区绿 / 暖琥珀 / AI 紫 / 状态色 / 卡片阴影）；
 - App Router 根布局、字体、Tooltip Provider、Sonner Toaster；
-- 设计风格预览页（`/`），用于审核基础视觉与组件质感；
-- `cn` 工具函数统一为 `clsx + tailwind-merge`。
+- `cn` 工具函数统一为 `clsx + tailwind-merge`（`src/lib/utils.ts`）。
 
-本阶段只搭基础设施，不接入业务接口；后续阶段依次实现加入空间、浏览检索、详情、发布、申请预约、留言通知和看板。
+> 业务页面（发现流 / 详情 / 发布 / 看板等）已在「前端（页面与交互）」一节交付，本节仅记录基础设施。
 
 ## 数据库说明
 
@@ -128,6 +140,10 @@ curl -s http://localhost:3000/api/health
   - `CHECK ("price" IS NULL OR "price" >= 0)` —— 价格非负；
   - `CHECK ("tradeType" <> 'FIXED_PRICE' OR "price" IS NOT NULL)` —— 固定价必填价格。
     （§4.4 表中「图片 ≤6 张 / 类型 / 单张大小」属**应用层**校验，且跨行计数无法用普通 CHECK 表达。）
+- **迁移 0002**：`prisma/migrations/0002_claim_pending_unique/migration.sql` 手写**部分唯一索引**
+  `ClaimRequest_itemId_applicantId_pending_key ON ("ClaimRequest")("itemId","applicantId") WHERE status='PENDING'`
+  —— Prisma schema 无法表达带 `WHERE` 的部分索引，故与 0001 的 CHECK 同源手写。它只作用于有效（PENDING）申请，
+  申请被拒 / 取消 / 完成后允许复投；是 `submitClaim` 应用层断言的 DB 兜底。
 - 之所以手写而非 `prisma migrate dev` 生成：沙箱内该命令会被 SIGKILL；迁移已是**定稿 SQL**，
   在真实 PG 上用 `npm run prisma:deploy` 应用即可（**不要**再用 `migrate dev` 重新生成，否则会与 schema 漂移）。
   本轮已在 **PostgreSQL 16.14** 上实际应用并验证（10 表 / 6 枚举 / 2 CHECK 全部落地，见下「集成测试」）。
@@ -195,10 +211,12 @@ npm run test:integration   # 20 passed
 | `docs/api-contract.md`          | ★ REST 契约事实源（含 §10 契约与实现的边界规则，即 D8 硬约束）      |
 | `docs/er-diagram-final.mermaid` | 考试交付 ER 图                                                      |
 
-## 已知限制（本轮沙箱）
+## 已知限制
 
-1. **Prisma CLI 在沙箱会被 SIGKILL**：`npx prisma generate` / `validate` 可能失败。因此在**无 Docker / 正常环境**下需补跑：
-   `npm run db:up && npm run prisma:deploy && npm run prisma:generate && npm run db:seed`。
-2. **Docker 未运行**：本机未起 PostgreSQL，故 `GET /api/health` 的 `db` 字段在本机会显示 `"down"`（接口仍 200）。
-   迁移 SQL 与 seed 脚本作为交付物已写好，但**未在真实 PG 上实测**。
-3. 当前 `src/app/api/**` **仅实现 `health`**，其余业务接口在后续阶段交付。
+1. **限流状态仅存进程内**（`src/server/rate-limit.ts`）：AI 与上传的令牌桶是内存 `Map`，**多实例部署不共享**。本项目为单进程 Demo，够用；生产需换 Redis 等共享计数。
+2. **上传按 `Content-Type` 判定类型**（`src/server/storage/index.ts`）：未校验文件 magic bytes，伪造 `image/jpeg` 头可上传任意字节。本地演示可接受，生产需补内容嗅探。
+3. **图片落盘 `public/uploads`**：由 Next.js 静态托管，`output: 'standalone'` / 独立 CDN 部署下需改用对象存储（`StorageAdapter` 已留扩展点，换实现即可）。
+4. **`npm run build` 前先停 `npm run dev`**：Next.js 15 的 dev 与 build 共用 `.next`，否则会出现 `routes-manifest.json` 缺失类报错；遇到时删除 `.next` 重来。
+5. **Node 版本**：`engines` 要求 `>=22 <23`；用更新的 Node（如 24）运行会报 `EBADENGINE` 警告，功能不受影响。
+
+> 历史沙箱限制（Prisma CLI 被 SIGKILL、Docker 未运行、仅实现 health）均已解除：本轮迁移已在 **PostgreSQL 16** 上 `prisma:deploy` 落地，`tests/integration/**` 真连库 **171 项全绿**，25 个 Route Handler 全部实现。
