@@ -63,8 +63,18 @@ export default function DashboardPage() {
     下面的两张分布图仍按当前页算，所以标题明确写「本页」，不冒充全量。
   */
   const cards = [
-    { label: '本月发布', value: stats?.monthPublished, emoji: '📦', grad: 'from-emerald-500 to-teal-500' },
-    { label: '本月成交', value: stats?.monthCompleted, emoji: '🤝', grad: 'from-orange-500 to-amber-500' },
+    {
+      label: '本月发布',
+      value: stats?.monthPublished,
+      emoji: '📦',
+      grad: 'from-emerald-500 to-teal-500',
+    },
+    {
+      label: '本月成交',
+      value: stats?.monthCompleted,
+      emoji: '🤝',
+      grad: 'from-orange-500 to-amber-500',
+    },
     { label: '当前在售', value: stats?.activeCount, emoji: '🏷️', grad: 'from-sky-500 to-cyan-500' },
   ];
 
@@ -88,7 +98,9 @@ export default function DashboardPage() {
           </>
         }
         desc={`服务端按社区全量与 ${'Asia/Shanghai'} 自然月聚合${
-          stats ? `（${stats.monthRange.start.slice(0, 10)} ~ ${stats.monthRange.end.slice(0, 10)}）` : ''
+          stats
+            ? `（${stats.monthRange.start.slice(0, 10)} ~ ${stats.monthRange.end.slice(0, 10)}）`
+            : ''
         }`}
       />
 

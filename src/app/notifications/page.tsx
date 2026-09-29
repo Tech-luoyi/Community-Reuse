@@ -5,7 +5,7 @@ import { BellRing, CheckCheck } from 'lucide-react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { get, post } from '@/lib/api';
-import { cn } from '@/lib/cn';
+import { cn } from '@/lib/utils';
 import { formatDateTime } from '@/lib/format';
 import { Button, EmptyState, ErrorPanel, SectionTitle, Skeleton } from '@/components/ui';
 import type { NotificationDto } from '@/shared/schemas';
@@ -21,13 +21,7 @@ const TYPE_ICON: Record<string, { e: string; bg: string }> = {
 
 export default function NotificationsPage() {
   const qc = useQueryClient();
-  const {
-    data,
-    isLoading,
-    isError,
-    isFetching,
-    refetch,
-  } = useQuery({
+  const { data, isLoading, isError, isFetching, refetch } = useQuery({
     queryKey: ['notifications'],
     queryFn: () => get<NotificationDto[]>('/api/me/notifications'),
   });
@@ -65,7 +59,11 @@ export default function NotificationsPage() {
   if (isError || !data) {
     return (
       <div className="mx-auto max-w-2xl">
-        <SectionTitle kicker="通知" title="站内通知" desc="读取失败时不放数字，也不显示「全部已读」。" />
+        <SectionTitle
+          kicker="通知"
+          title="站内通知"
+          desc="读取失败时不放数字，也不显示「全部已读」。"
+        />
         <div className="mt-4">
           <ErrorPanel
             title="通知读取失败"

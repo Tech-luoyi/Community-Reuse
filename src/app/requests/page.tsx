@@ -7,7 +7,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { get, post } from '@/lib/api';
 import { formatDateTime } from '@/lib/format';
-import { cn } from '@/lib/cn';
+import { cn } from '@/lib/utils';
 import { Button, EmptyState, SectionTitle, Skeleton } from '@/components/ui';
 import type { ClaimDto } from '@/shared/types';
 

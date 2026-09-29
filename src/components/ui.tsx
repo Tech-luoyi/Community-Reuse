@@ -1,4 +1,4 @@
-import { cn } from '@/lib/cn';
+import { cn } from '@/lib/utils';
 import { RefreshCw } from 'lucide-react';
 import { cva, type VariantProps } from 'class-variance-authority';
 import React from 'react';

@@ -48,7 +48,9 @@ export function MyItemsPanel() {
             key={t.key}
             onClick={() => setTab(t.key)}
             className={`rounded-full px-2.5 py-1 text-xs font-bold transition ${
-              tab === t.key ? 'bg-stone-900 text-white' : 'bg-stone-100 text-stone-600 hover:bg-stone-200'
+              tab === t.key
+                ? 'bg-stone-900 text-white'
+                : 'bg-stone-100 text-stone-600 hover:bg-stone-200'
             }`}
           >
             {t.label}

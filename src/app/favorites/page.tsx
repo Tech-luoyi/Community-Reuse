@@ -48,11 +48,7 @@ export default function FavoritesPage() {
       )}
 
       {items?.length === 0 && !isLoading && !isError && (
-        <EmptyState
-          emoji="💌"
-          title="收藏夹还是空的"
-          hint="在物品详情页点 ❤️ 就会出现在这里。"
-        />
+        <EmptyState emoji="💌" title="收藏夹还是空的" hint="在物品详情页点 ❤️ 就会出现在这里。" />
       )}
 
       {!!items?.length && (

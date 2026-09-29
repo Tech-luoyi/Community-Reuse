@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { Heart, MessageCircle, Send } from 'lucide-react';
 import { useState } from 'react';
-import { cn } from '@/lib/cn';
+import { cn } from '@/lib/utils';
 import { formatAgeHours, formatPrice, freshnessStyle, TRADE_TYPE_LABEL } from '@/lib/format';
 import { Badge } from './ui';
 import type { ItemDto } from '@/shared/types';
