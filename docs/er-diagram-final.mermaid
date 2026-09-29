@@ -13,7 +13,10 @@ erDiagram
     User ||--o{ Favorite : "收藏"
     Item ||--o{ Favorite : "被收藏"
     User ||--o{ Notification : "接收通知"
+    Item ||--o| ItemEmbedding : "语义向量(0..1)"
     %% AiCache（LLM 缓存）为独立表，无外键关系
+    %% ItemEmbedding 的 communityId 是**有意冗余**：向量检索须「先按社区过滤、再按距离排序」
+    %%   （§6.5.6 第 6 条）。迁移 0003 用 CHECK 约束钉住它与 Item.communityId 一致。
     %% 定稿决策：举报 + 管理员隐藏已砍除 → 无 Report 实体，无 role 字段
 
     Community {
@@ -109,4 +112,13 @@ erDiagram
         AiKind kind "PRICING|POLISH|FAQ"
         string outputJson "缓存结果JSON"
         datetime createdAt
+    }
+
+    ItemEmbedding {
+        string itemId PK_FK "-> Item.id, ON DELETE CASCADE"
+        string communityId "冗余自 Item(有 CHECK 保证一致)"
+        vector embedding "vector(1536) pgvector 类型"
+        string contentHash "语料哈希,幂等重算依据"
+        datetime createdAt
+        datetime updatedAt "raw 写入须显式赋值(§6.7.1 P5)"
     }
