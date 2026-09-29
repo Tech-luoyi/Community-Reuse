@@ -37,6 +37,7 @@ import {
 } from '@/server/ai/gateway';
 import {
   type CachePort,
+  type GraphEvent,
   type ToolExecutor,
   gatewayModelPort,
   runAgentGraph,
@@ -214,6 +215,7 @@ function scopedCachePort(kind: AiKind, payload: unknown, scope?: CacheKeyScope):
 export async function generatePricing(
   input: PricingRequest,
   communityId: string,
+  options?: { onEvent?: (event: GraphEvent) => void },
 ): Promise<PricingResult> {
   const commFp = await computeCommunityFingerprint(communityId);
   const scope: CacheKeyScope = {
@@ -257,7 +259,10 @@ export async function generatePricing(
     cachePayload: payload,
     model: gatewayModelPort,
     cache: scopedCachePort('PRICING', payload, scope),
-    onEvent: observer.onEvent,
+    onEvent: (event) => {
+      observer.onEvent(event);
+      options?.onEvent?.(event);
+    },
   });
   flushObserver(observer);
   return { ...meta, ...output };
