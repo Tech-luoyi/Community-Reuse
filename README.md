@@ -107,6 +107,19 @@ curl -s http://localhost:3000/api/health
 - 权限：**由关系推导**（`MEMBER` / `OWNER` / `ACCEPTED_APPLICANT`），**无角色列、无 ADMIN**；越权 403、未登录 401。
 - 多租户：**社区只认服务端会话**（`session.currentCommunityId`）；请求体 / 查询串里的 `communityId` 一律与会话比对，不符 403。
 
+## 前端（阶段 0 · 基础设施）
+
+前端按 `docs/frontend-design-system.md` 与 `docs/frontend-ui-prompts.md` 执行，当前已完成：
+
+- Tailwind CSS v4 + PostCSS 接入；
+- shadcn/ui 初始化（`components.json`、`src/components/ui/**`）；
+- 全局设计 token（社区绿 / 暖琥珀 / AI 紫 / 状态色 / 卡片阴影）；
+- App Router 根布局、字体、Tooltip Provider、Sonner Toaster；
+- 设计风格预览页（`/`），用于审核基础视觉与组件质感；
+- `cn` 工具函数统一为 `clsx + tailwind-merge`。
+
+本阶段只搭基础设施，不接入业务接口；后续阶段依次实现加入空间、浏览检索、详情、发布、申请预约、留言通知和看板。
+
 ## 数据库说明
 
 - **事实源**：`docs/schema.prisma`（架构师复核通过）。`prisma/schema.prisma` 与它 **逐字一致**（用 `diff` 证明，见下）。
