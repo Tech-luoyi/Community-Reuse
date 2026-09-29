@@ -23,9 +23,17 @@ export function ItemCard({ item }: { item: ItemDto }) {
   return (
     <Link
       href={`/items/${item.id}`}
-      className="group flex flex-col overflow-hidden rounded-xl border border-line bg-surface shadow-card transition-[transform,box-shadow,border-color] duration-300 ease-spring hover:-translate-y-0.5 hover:border-line-strong hover:shadow-card-hover focus-visible:-translate-y-0.5"
+      className="group reveal-up flex flex-col overflow-hidden rounded-xl border border-line bg-surface shadow-card transition-[transform,box-shadow,border-color] duration-300 ease-spring hover:-translate-y-1 hover:border-line-strong hover:shadow-card-hover focus-visible:-translate-y-1"
     >
-      <div className="relative aspect-[4/3] overflow-hidden bg-surface-sunken">
+      {/*
+        图片区。视觉重心在这里 —— 这是一个靠照片判断能不能要的 app，
+        所以给图片三层处理：
+        ① 内描边 ring-inset：让照片边缘和卡片有一个 1px 收口，照片不「贴」在卡片上；
+        ② 三段式压暗：底部信息条要放白字，压暗必须够深，但顶部要完全透明不脏照片；
+        ③ 悬停时缓慢推近 + 轻微提亮。推近走独立 scale 属性而不是 transform 简写，
+           这样不会被 hover 时其他 transform 覆盖。
+      */}
+      <div className="relative aspect-[4/3] overflow-hidden bg-surface-sunken ring-1 ring-inset ring-black/[0.04]">
         {item.coverUrl && coverOk ? (
           // eslint-disable-next-line @next/next/no-img-element
           <img
@@ -34,25 +42,28 @@ export function ItemCard({ item }: { item: ItemDto }) {
             loading="lazy"
             decoding="async"
             onError={() => setCoverOk(false)}
-            // 悬停时缓慢放大 1.04：这是让静态卡片"活过来"最便宜的手法。
-            // 放大的是 img 本身（overflow-hidden 裁掉溢出），所以不会撑破布局。
-            className="size-full object-cover transition-transform duration-500 ease-out-expo group-hover:scale-[1.04]"
+            className="size-full object-cover transition-[scale,filter] duration-700 ease-out-expo group-hover:scale-[1.06] group-hover:brightness-[1.04]"
           />
         ) : (
-          <span className="grid size-full place-items-center">
+          // 无图占位：给一点径向高光，而不是一块死板的纯色。仍然只用中性色，
+          // 不猜内容长什么样 —— 颜色不该替内容说话。
+          <span className="grid size-full place-items-center bg-[radial-gradient(60%_60%_at_50%_40%,rgb(255_255_255/0.7),transparent)]">
             <Package size={28} strokeWidth={1.5} className="text-ink-tertiary" />
           </span>
         )}
 
         <div className="absolute left-3 top-3">
-          <Badge tone={freshnessTone(item.freshness.code)} className="bg-white/88 backdrop-blur-sm">
+          <Badge
+            tone={freshnessTone(item.freshness.code)}
+            className="border-white/50 bg-white/85 shadow-sm backdrop-blur-md"
+          >
             {item.freshness.label}
           </Badge>
         </div>
 
-        <div className="absolute inset-x-0 bottom-0 flex items-center gap-1.5 bg-gradient-to-t from-black/55 to-transparent px-3 pb-2 pt-8 text-2xs text-white/95">
+        <div className="absolute inset-x-0 bottom-0 flex items-center gap-1.5 bg-gradient-to-t from-black/70 via-black/25 to-transparent px-3 pb-2.5 pt-10 text-2xs text-white/95">
           <span>{TRADE_TYPE_LABEL[item.tradeType]}</span>
-          <span aria-hidden className="text-white/40">
+          <span aria-hidden className="text-white/45">
             ·
           </span>
           <span>{formatAgeHours(item.freshness.ageHours)}</span>

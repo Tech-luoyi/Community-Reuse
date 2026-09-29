@@ -290,6 +290,55 @@
     0.855,
     0.934 100.1%
   );
+
+  /* 氛围色：极淡，只作为光晕出现在页面顶部。alpha 上限 10%，
+     再高就会开始和物品状态色抢注意力。 */
+  --glow-brand: oklch(0.72 0.13 162);
+  --glow-sky: oklch(0.7 0.11 242);
+  --glow-warm: oklch(0.82 0.09 78);
+}
+
+/* ---------------------------------------------------------------------------
+ * 氛围层（body::before）
+ *
+ * v3.1 之前整页是一个纯色底 —— 没有光、没有深度，页面像一张平铺的表格。
+ * 这一层加三样东西，全部是**静态背景**，不参与滚动、不触发重排：
+ *
+ *   1. 三团径向光晕（品牌绿 / 天蓝 / 暖琥珀），分别落在顶部中央、右上、左侧。
+ *      模拟「上方有一盏灯」，页面从平面变成有纵深的场。
+ *   2. 一层 44px 工程网格，用 mask 让它从顶部向下淡出，避免生硬的边界。
+ *
+ * 为什么放在 body::before 而不是 body 的 background-image？
+ * 因为网格需要 mask 单独控制衰减，而 body 的多层 background 无法给单层加 mask。
+ * body::before 用 z-index:-1 —— 绘制顺序是「html 背景 → body 背景 → 负 z-index
+ * 子元素 → body 内容」，所以它稳稳落在纯色底之上、内容之下，不需要任何
+ * position/z-index 包装，也不会影响任何组件的层叠。
+ * ---------------------------------------------------------------------- */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background-image:
+    /* ① 品牌绿光：顶部中央，模拟主光源 */
+    radial-gradient(88% 52% at 50% -10%, rgb(16 185 129 / 0.1), transparent 62%),
+    /* ② 天蓝：右上，模拟环境补光 */
+      radial-gradient(58% 42% at 88% 4%, rgb(96 165 250 / 0.075), transparent 58%),
+    /* ③ 暖琥珀：左侧，给暖石底色加一点温度 */
+      radial-gradient(48% 38% at 6% 26%, rgb(245 158 11 / 0.07), transparent 56%),
+    /* ④ 工程网格：两条 1px 线性渐变拼出来 */
+      linear-gradient(rgb(28 25 23 / 0.038) 1px, transparent 1px),
+    linear-gradient(90deg, rgb(28 25 23 / 0.038) 1px, transparent 1px);
+  background-size:
+    100% 100%,
+    100% 100%,
+    100% 100%,
+    44px 44px,
+    44px 44px;
+  /* 网格和光晕一起从顶部往下淡出。-webkit- 前缀给 Safari。 */
+  mask-image: radial-gradient(125% 78% at 50% -6%, #000 8%, transparent 72%);
+  -webkit-mask-image: radial-gradient(125% 78% at 50% -6%, #000 8%, transparent 72%);
 }
 
 html {
@@ -367,6 +416,99 @@ body::after {
 .no-scrollbar {
   -ms-overflow-style: none;
   scrollbar-width: none;
+}
+
+/* ---------------------------------------------------------------------------
+ * 关键帧动画
+ * ---------------------------------------------------------------------- */
+
+/*
+ * 骨架微光（shimmer）。
+ *
+ * 原来 Skeleton 用的是 `animate-pulse` —— 整块明暗闪烁，像坏掉的视频。
+ * 改成一道光从左扫到右，方向感明确，读起来是「正在加载」而不是「出问题了」。
+ *
+ * 实现上不是动 background-position（那会每帧重绘），而是让一层
+ * translateX 的高光伪元素扫过 —— 走合成器，只动 transform。
+ */
+@keyframes shimmer {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(100%);
+  }
+}
+
+.skeleton {
+  position: relative;
+  overflow: hidden;
+  background: var(--color-surface-sunken);
+}
+.skeleton::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(
+    90deg,
+    transparent,
+    color-mix(in oklab, var(--color-surface) 70%, transparent),
+    transparent
+  );
+  animation: shimmer 1.6s var(--ease-out-quart) infinite;
+}
+
+/*
+ * 状态呼吸点。
+ *
+ * 只给**真的有等待语义**的状态用（待处理、正在生成）。持续动画在页面上
+ * 最多允许出现一两处，多了就成噪音。已确认/已完成这类终态绝不用。
+ */
+@keyframes breathe {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
+}
+
+.status-live {
+  animation: breathe 2.4s ease-in-out infinite;
+}
+
+/*
+ * 滚动入场（纯 CSS，零 JS）。
+ *
+ * 用 `animation-timeline: view()` 让元素随滚动进度自己动，不监听 scroll
+ * 事件、不读 layout。只动 transform + opacity，走合成器。
+ *
+ * 关键安全设计：动画的**终态是「完全可见」**，且用 `both` 填充。所以
+ * ① 不支持 scroll-driven 的浏览器直接显示最终状态（正常可见）；
+ * ② 元素进入视口时一定已经播完；
+ * ③ 即便时间线因为某种原因没触发，元素也只会停在起始的「略微下移+淡入」，
+ *    仍然可见 —— 不会白屏、不会永远透明。
+ */
+@keyframes reveal-up {
+  from {
+    opacity: 0;
+    transform: translateY(18px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@supports (animation-timeline: view()) {
+  .reveal-up {
+    animation: reveal-up linear both;
+    animation-timeline: view();
+    /* 元素顶部刚进入视口时开始，完全进入后 22% 处结束 */
+    animation-range: entry 4% cover 22%;
+  }
 }
 
 /*

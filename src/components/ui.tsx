@@ -45,6 +45,13 @@ const buttonVariants = cva(
           'bg-danger text-white shadow-sm transition-[transform,box-shadow,background-color] duration-200 ease-out-expo hover:bg-danger/90 active:scale-[0.97]',
         /** AI 相关操作。紫色描边 + 极浅底，和主流程视觉分离。 */
         ai: 'border border-ai-line bg-ai-bg text-ai transition-colors duration-150 hover:bg-ai-line/50',
+        /**
+         * 品牌操作。**整个系统里唯一带彩色光晕的按钮**，所以它是全站最强的
+         * 视觉锚点 —— 只给「加入小区」这一个转化动作用，每屏至多出现一次。
+         * 光晕是静态 box-shadow，不动 filter，避免每帧重绘。
+         */
+        brand:
+          'bg-brand text-white shadow-[0_1px_2px_-1px_rgb(4_120_87/0.4),0_8px_24px_-8px_rgb(16_185_129/0.55)] transition-[transform,box-shadow,background-color] duration-200 ease-out-expo hover:bg-brand-deep hover:shadow-[0_2px_4px_-2px_rgb(4_120_87/0.45),0_12px_32px_-8px_rgb(16_185_129/0.6)] active:scale-[0.97]',
       },
       size: {
         sm: 'h-8 rounded-sm px-2.5 text-xs [&_svg:not([class*=size-])]:size-3.5',
@@ -269,7 +276,9 @@ export function Textarea({
 }
 
 export function Skeleton({ className }: { className?: string }) {
-  return <div className={cn('animate-pulse rounded-md bg-surface-sunken', className)} />;
+  // 用 .skeleton（微光扫过）而不是 animate-pulse（整块明暗闪）。
+  // 后者读起来像「加载坏了」，前者读起来是「正在加载」。
+  return <div className={cn('skeleton rounded-md', className)} />;
 }
 
 /**
