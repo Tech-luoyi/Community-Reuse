@@ -16,18 +16,35 @@
  */
 import type { AiKind } from '@/shared/types';
 
-/** 每轮模型调用的超时上限（§6.6.3）。 */
-export const MODEL_ROUND_TIMEOUT_MS = 6000;
+/**
+ * 每轮模型调用的超时上限（§6.6.3 基线 6000）。
+ *
+ * 推理型供应商需要更宽的预算：隐藏思考链会把单轮拉长到 7–13s，6s 会稳定触发
+ * 「超时 → 重试 → 再超时 → 降级」链，表现为接口很慢且永远拿不到 `source:'llm'`。
+ * 用 `LLM_TIMEOUT_MS` 按供应商调，不改代码即可换档。
+ */
+const MODEL_ROUND_TIMEOUT_DEFAULT = 6000;
+export const MODEL_ROUND_TIMEOUT_MS =
+  Number(process.env.LLM_TIMEOUT_MS) > 0
+    ? Number(process.env.LLM_TIMEOUT_MS)
+    : MODEL_ROUND_TIMEOUT_DEFAULT;
 /** 全局硬闸（§6.6.3；本轮无工具，供 T12 使用）。 */
 export const TOTAL_DEADLINE_MS = 20000;
 /** 可重试故障的退避时长。 */
 export const RETRY_BACKOFF_MS = 300;
 
-/** 各能力的 `max_tokens`（§6.1）。 */
+/**
+ * 各能力的 `max_tokens`（§6.1）。
+ *
+ * 预算必须为**推理模型的隐藏思考**留出余量：部分供应商的模型会先消耗 300–600 token
+ * 生成 `reasoning_content`（计入 `completion_tokens`，但 `reasoning_tokens` 不上报），
+ * 预算不足时 `finish_reason` 会是 `length` 且 `content` 被截断在 JSON 中间 ——
+ * 表现为 `JSON.parse` 失败 → REPAIR 轮同样截断 → 规则降级。
+ */
 export const MODEL_MAX_TOKENS: Record<AiKind, number> = {
-  PRICING: 300,
-  POLISH: 400,
-  FAQ: 250,
+  PRICING: 1200,
+  POLISH: 1600,
+  FAQ: 1000,
 };
 
 /** 各能力的 `temperature`（§6.1：0.3–0.7）。 */
