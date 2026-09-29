@@ -15,6 +15,7 @@
  *   3. **租户只来自会话**：`communityId` 由调用方从 session 传入，工具入参里的同名字段被剥除。
  */
 import { Annotation, END, START, StateGraph } from '@langchain/langgraph';
+import type { BaseCheckpointSaver } from '@langchain/langgraph';
 
 import type { AiKind, AiMeta } from '@/shared/types';
 
@@ -79,6 +80,12 @@ export interface AgentRunSpec<T> {
   cachePayload: unknown;
   model: ModelPort;
   cache: CachePort;
+  /**
+   * 多轮记忆（§6.4 第 ③ 项）。两者**必须同时给**：只有 checkpointer 没有 threadId 时
+   * LangGraph 会拒绝执行，所以这里不做「只传一个」的容错——静默忽略会让人以为记忆生效了。
+   */
+  checkpointer?: BaseCheckpointSaver;
+  threadId?: string;
   now?: () => number;
   onEvent?: (event: GraphEvent) => void;
 }
@@ -179,12 +186,15 @@ export async function runAgentGraph<T>(
     };
   };
 
-  const buildPrompt = async (): Promise<Partial<GraphState>> => {
+  const buildPrompt = async (s: GraphState): Promise<Partial<GraphState>> => {
     emit({ state: 'BUILD_PROMPT', attempt: attempts, latencyMs: 0 });
+    // 有记忆时 system prompt **不重复追加**：messages 通道已被 checkpointer 恢复，
+    // 再塞一份会让模型看到 N 份相同指令，既费 token 又稀释注意力。
+    const hasSystem = s.messages.some((m) => m.role === 'system');
     return {
       messages: [
-        { role: 'system', content: spec.systemPrompt },
-        { role: 'user', content: spec.userPrompt },
+        ...(hasSystem ? [] : [{ role: 'system' as const, content: spec.systemPrompt }]),
+        { role: 'user' as const, content: spec.userPrompt },
       ],
       availableTools: spec.tools,
       budget: newBudget(now()),
@@ -457,14 +467,17 @@ export async function runAgentGraph<T>(
     })
     .addEdge('fallback', 'persist')
     .addEdge('persist', END)
-    .compile();
+    .compile(spec.checkpointer ? { checkpointer: spec.checkpointer } : {});
 
   const final = (await workflow.invoke(
     {
       budget: newBudget(now()),
       availableTools: spec.tools,
     } as unknown as Partial<GraphState>,
-    { recursionLimit: 24 },
+    {
+      recursionLimit: 24,
+      ...(spec.threadId ? { configurable: { thread_id: spec.threadId } } : {}),
+    },
   )) as unknown as GraphState;
 
   const meta = final.meta ?? {

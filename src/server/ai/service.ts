@@ -27,6 +27,7 @@ import type {
 } from '@/shared/types';
 
 import { type CacheKeyScope, computeCacheKey, getCached, putCached } from '@/server/ai/cache';
+import { getCheckpointer } from '@/server/ai/checkpoint';
 import { computeCommunityFingerprint, PRICING_CACHE_VARIANT } from '@/server/ai/fingerprint';
 import { fallbackFaq, fallbackPolish, fallbackPricing } from '@/server/ai/fallback';
 import {
@@ -215,7 +216,7 @@ function scopedCachePort(kind: AiKind, payload: unknown, scope?: CacheKeyScope):
 export async function generatePricing(
   input: PricingRequest,
   communityId: string,
-  options?: { onEvent?: (event: GraphEvent) => void },
+  options?: { onEvent?: (event: GraphEvent) => void; threadId?: string },
 ): Promise<PricingResult> {
   const commFp = await computeCommunityFingerprint(communityId);
   const scope: CacheKeyScope = {
@@ -259,6 +260,11 @@ export async function generatePricing(
     cachePayload: payload,
     model: gatewayModelPort,
     cache: scopedCachePort('PRICING', payload, scope),
+    // 记忆不可用（表没建 / 连接失败）时 getCheckpointer 返回 null ⇒ 退化为无记忆单次调用，
+    // 接口语义完全不变（§6.4 纪律 3：增强项挂了不许把主路径拖下水）。
+    ...(options?.threadId === undefined
+      ? {}
+      : { checkpointer: getCheckpointer() ?? undefined, threadId: options.threadId }),
     onEvent: (event) => {
       observer.onEvent(event);
       options?.onEvent?.(event);

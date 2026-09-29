@@ -4,9 +4,15 @@
  *
  * 门控：需 `RUN_INTEGRATION=1`；默认 `npm run test` 不加载本文件。
  */
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
 import { afterAll, describe, expect, it } from 'vitest';
 
 import { closePool, pool } from './helpers/db';
+
+const projectRoot = fileURLToPath(new URL('../../', import.meta.url));
 
 const EXPECTED_TABLES = [
   'AiCache',
@@ -19,6 +25,22 @@ const EXPECTED_TABLES = [
   'Message',
   'Notification',
   'User',
+];
+
+/**
+ * LangGraph `PostgresSaver.setup()` 建的**外部管理表**（见 §10 DDL 归属纪律）。
+ *
+ * 它们刻意不进 `prisma/schema.prisma`：否则 `prisma migrate` 会与框架抢同一批 DDL，
+ * 把框架的表当成「意外表」生成 DROP。
+ *
+ * 这里显式列出的意义：业务表断言保持**严格白名单**，任何**新增**的意外表仍会让测试失败——
+ * 而不是把期望数量往上加一号、从此对多出来的表视而不见。
+ */
+const EXTERNAL_TABLES = [
+  'checkpoint_blobs',
+  'checkpoint_migrations',
+  'checkpoint_writes',
+  'checkpoints',
 ];
 
 const EXPECTED_ENUMS = [
@@ -35,7 +57,7 @@ describe('迁移落地：结构（10 表 / 6 枚举 / 2 CHECK）', () => {
     await closePool();
   });
 
-  it('10 张业务表齐备（除去 _prisma_migrations）', async () => {
+  it('10 张业务表齐备（除去 _prisma_migrations 与 LangGraph 外部管理表）', async () => {
     const { rows } = await pool.query<{ table_name: string }>(
       `SELECT table_name
          FROM information_schema.tables
@@ -44,7 +66,29 @@ describe('迁移落地：结构（10 表 / 6 枚举 / 2 CHECK）', () => {
           AND table_name <> '_prisma_migrations'
         ORDER BY table_name`,
     );
-    expect(rows.map((row) => row.table_name)).toEqual(EXPECTED_TABLES);
+    const all = rows.map((row) => row.table_name);
+    // 业务表：严格等于白名单
+    expect(all.filter((t) => !EXTERNAL_TABLES.includes(t))).toEqual(EXPECTED_TABLES);
+    // 不存在白名单之外的第三种表——新增意外表仍然会红
+    expect(all.filter((t) => !EXPECTED_TABLES.includes(t) && !EXTERNAL_TABLES.includes(t))).toEqual(
+      [],
+    );
+  });
+
+  it('LangGraph checkpoint 表不由 Prisma 声明（DDL 归属纪律，§10）', async () => {
+    const schema = readFileSync(join(projectRoot, 'prisma', 'schema.prisma'), 'utf8');
+    for (const table of EXTERNAL_TABLES) {
+      expect(schema, `checkpoint 表 ${table} 不应出现在 prisma/schema.prisma`).not.toContain(
+        `model ${table}`,
+      );
+    }
+    // 反向确认：这些表确实由框架建好了，记忆功能有落点
+    const { rows } = await pool.query<{ table_name: string }>(
+      `SELECT table_name FROM information_schema.tables
+        WHERE table_schema = 'public' AND table_name = ANY($1)`,
+      [EXTERNAL_TABLES],
+    );
+    expect(rows).toHaveLength(EXTERNAL_TABLES.length);
   });
 
   it('6 个枚举类型齐备', async () => {
