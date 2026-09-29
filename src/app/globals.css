@@ -1,0 +1,96 @@
+@import 'tailwindcss';
+
+@theme {
+  --font-sans:
+    'Inter', ui-sans-serif, system-ui, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei',
+    sans-serif;
+
+  --color-cream-50: #fffdf7;
+  --color-cream-100: #fef9ec;
+  --color-ink-900: #1c1917;
+  --color-leaf-500: #16a34a;
+  --color-leaf-600: #15803d;
+
+  --animate-float-slow: float 9s ease-in-out infinite;
+  --animate-marquee: marquee 28s linear infinite;
+  --animate-shimmer: shimmer 2.2s linear infinite;
+
+  @keyframes float {
+    0%,
+    100% {
+      transform: translateY(0px);
+    }
+    50% {
+      transform: translateY(-16px);
+    }
+  }
+  @keyframes marquee {
+    from {
+      transform: translateX(0);
+    }
+    to {
+      transform: translateX(-50%);
+    }
+  }
+  @keyframes shimmer {
+    from {
+      background-position: -200% 0;
+    }
+    to {
+      background-position: 200% 0;
+    }
+  }
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  background: var(--color-cream-50);
+  color: var(--color-ink-900);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
+}
+
+/* ambient gradient blobs behind every page */
+.ambient-bg {
+  position: fixed;
+  inset: 0;
+  z-index: -2;
+  overflow: hidden;
+  background:
+    radial-gradient(42rem 26rem at 8% -6%, rgba(22, 163, 74, 0.14), transparent 60%),
+    radial-gradient(36rem 24rem at 95% 8%, rgba(249, 115, 22, 0.14), transparent 60%),
+    radial-gradient(30rem 30rem at 50% 110%, rgba(59, 130, 246, 0.12), transparent 60%),
+    var(--color-cream-50);
+}
+
+::selection {
+  background: #16a34a;
+  color: #fff;
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+/*
+ * 无障碍与性能兜底：系统层面要求减少动效时，一律关掉过渡与无限动画。
+ * 同时也能压住下面这类装饰性动画在低端设备上的开销。
+ */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

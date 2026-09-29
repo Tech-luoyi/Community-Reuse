@@ -64,6 +64,28 @@ const eslintConfig = [
       ],
     },
   },
+  {
+    // D8 解耦硬约束（反向）：前端只允许通过 HTTP + src/shared/** 与后端通信，
+    // 禁止 import 服务端实现（src/server/**）与 Route Handler（src/app/api/**）。
+    files: ['src/app/**/*.tsx', 'src/components/**/*.tsx', 'src/hooks/**/*.ts', 'src/lib/**/*.ts'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            {
+              group: ['@/server', '@/server/*', '**/server/**'],
+              message: 'D8：前端禁止直连服务端实现，只能通过 HTTP 接口 + src/shared/** 契约。',
+            },
+            {
+              group: ['@/app/api', '@/app/api/*', '@/app/**/route'],
+              message: 'D8：前端禁止 import Route Handler，请走 fetch 调用。',
+            },
+          ],
+        },
+      ],
+    },
+  },
   ...compat.extends('prettier'),
 ];
 

@@ -1,9 +1,11 @@
-# 邻里流转（community-reuse）· 后端工程
+# 邻里流转（community-reuse）· 全栈工程
 
 > 面向 **小区 / 楼栋 / 办公室** 的闲置物品流转工具。
-> 本仓库当前为 **纯后端工程**（客户本轮指令：「前端不用管，你开始做后端吧，工程规范做好」）——
-> 只实现 `prisma/**`、`src/shared/**`、`src/server/**`、`src/app/api/**`、`tests/**` 与工程配置，
-> **不含任何页面 / 组件 / hooks**。
+> **后端** = `prisma/**`、`src/shared/**`、`src/server/**`、`src/app/api/**`、`tests/**`；
+> **前端** = `src/app/**`（页面）、`src/components/**`、`src/hooks/**`、`src/lib/**`、`src/app/globals.css`。
+> 同仓协作但受 **D8 解耦**硬约束（`eslint.config.mjs` 双向 `no-restricted-imports`）：
+> 前端只可 import `src/shared/**`（Zod 契约 + DTO），禁止触碰 `src/server/**` 与 Route Handler；
+> 后端禁止 import 页面 / 组件 / hooks / lib —— 通信一律走 HTTP + `docs/api-contract.md`。
 
 ## 架构一句话
 
@@ -25,7 +27,14 @@ community-reuse/
 │  ├─ migrations/0001_init/migration.sql   # 手写迁移（enum/表/索引/外键 + D3 CHECK 约束）
 │  └─ seed.ts + seed-data.ts          # 种子脚本 + 纯数据（可单测）
 ├─ src/
-│  ├─ app/api/health/route.ts         # 唯一已实现的接口：GET /api/health
+│  ├─ app/                          # ★ 页面（App Router）
+│  │  ├─ page.tsx                    # 首页：hero + 新鲜度流 + 筛选 + 分页
+│  │  ├─ join/ | items/new/ | items/[id]/   # 加入 / 发布 / 详情
+│  │  ├─ dashboard/ | requests/ | favorites/ | notifications/ | me/
+│  │  └─ api/**/route.ts             # REST 接口（见 docs/api-contract.md）
+│  ├─ components/                    # UI 组件（ui / ItemCard / FilterBar / ai / ClaimPanel…）
+│  ├─ hooks/                         # useQuery 封装（use-me / use-items）
+│  ├─ lib/                           # fetch 封装 + ApiError、格式化、图片压缩
 │  ├─ server/
 │  │  ├─ db.ts                        # PrismaClient 单例
 │  │  ├─ errors.ts                    # AppError + 错误码 → HTTP 状态映射
@@ -38,6 +47,15 @@ community-reuse/
 ├─ .github/workflows/ci.yml           # lint → typecheck → format:check → test（带 PG service container）
 └─ .env.example                       # 环境变量样例
 ```
+
+## 前端（页面与交互）
+
+- **技术栈**：Tailwind CSS v4（CSS-first `@theme`，无 `tailwind.config`）、framer-motion（`layoutId` 导航药丸 / 入场错峰 / 卡片倾斜 / 弹簧筛选）、TanStack Query（`keepPreviousData` 分页）、react-hook-form + zodResolver（**与后端共用 `src/shared/schemas.ts`，同源校验**）、recharts（看板图表）、lucide-react、sonner、canvas-confetti。组件为手写 shadcn 风格（`src/components/ui.tsx`，cva 变体），未引入 CLI。
+- **页面**：`/` 发现流、`/join` 邀请码加入、`/items/new` 发布（含 AI 定价 / 润色助手、canvas WebP 图片压缩）、`/items/[id]` 详情（画廊 + 想要面板 + 公开留言板）、`/dashboard` 看板、`/requests` 申请收发、`/favorites` 收藏、`/notifications` 通知、`/me` 个人中心。
+- **降级优先**：`GET /api/stats/community`、`messages`、`favorites`、`notifications` 等接口未实现时，前端自动切到客户端聚合 / 占位态（徽标标注「接口待联调」），页面不白屏。
+- **校验**：`npm run lint` → `npm run typecheck` → `npm run test` → `npm run build` 全绿。
+
+> ⚠️ Next.js 15 的 dev 与 build 共用 `.next`：**跑 `npm run build` 前先停掉 `npm run dev`**，否则会出现 `routes-manifest.json` 缺失类报错；遇到时 `Remove-Item -Recurse -Force .next` 后重来即可。
 
 ## 环境要求
 
@@ -68,6 +86,7 @@ npm run db:seed
 
 # 7) 启动开发服务器
 npm run dev
+open http://localhost:3000              # 页面入口（种子邀请码 LINFENG-2026）
 curl -s http://localhost:3000/api/health
 # => {"data":{"db":"ok","llm":false,"storage":"local"}}
 ```
