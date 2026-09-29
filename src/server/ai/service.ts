@@ -36,6 +36,20 @@ import {
   callModel,
 } from '@/server/ai/gateway';
 import {
+  type CachePort,
+  type ToolExecutor,
+  gatewayModelPort,
+  runAgentGraph,
+} from '@/server/ai/graph';
+import {
+  SETTLEMENT_TOOL_SPEC,
+  SettlementStatsArgsSchema,
+  ToolUnavailableError,
+  getCommunitySettlementStats,
+  renderSettlementForPrompt,
+} from '@/server/ai/tools';
+import { createObserver, flushObserver } from '@/server/ai/observe';
+import {
   FAQ_SYSTEM_PROMPT,
   type FaqModelOutput,
   FaqModelOutputSchema,
@@ -160,33 +174,92 @@ async function runLlm<T>(spec: RunLlmSpec<T>): Promise<RunLlmResult<T>> {
 }
 
 /**
- * `POST /api/ai/pricing`（§8 A）：智能定价建议。
+ * 把 `cache.ts` 的两级缓存包装成图的 `CachePort`。
+ *
+ * 作用域（`variant` + `commFp`）在这里注入——**图本身不知道租户的存在**，
+ * 租户纪律全部留在服务层，便于单测替图注入任意假缓存。
+ */
+function scopedCachePort(kind: AiKind, payload: unknown, scope?: CacheKeyScope): CachePort {
+  return {
+    get: async () => {
+      const hit = await getCached(kind, payload, scope);
+      if (hit === null) {
+        return null;
+      }
+      return {
+        output: hit.envelope.output,
+        usedTools: hit.envelope.usedTools,
+        toolCalls: hit.envelope.toolCalls,
+      };
+    },
+    put: async (_kind, _payload, value) => {
+      await putCached(computeCacheKey(kind, payload, scope), kind, {
+        output: value.output,
+        usedTools: value.usedTools,
+        toolCalls: value.toolCalls,
+        ...(scope === undefined
+          ? {}
+          : { variant: scope.variant, commFp: scope.communityFingerprint }),
+      });
+    },
+  };
+}
+
+/**
+ * `POST /api/ai/pricing`（§8 A）：智能定价建议——**走 agent 图**（§6.6）。
  *
  * `communityId` **只允许来自服务端会话**（route 传 `viewer.currentCommunityId`）：它决定缓存
- * 指纹的租户维度，若可被请求体左右，等价于把跨租户隔离交还给客户端（§6.5.6 第 1 条）。
+ * 指纹的租户维度与工具查询的租户谓词，若可被请求体左右，等价于把跨租户隔离交还给客户端。
  */
 export async function generatePricing(
   input: PricingRequest,
   communityId: string,
 ): Promise<PricingResult> {
   const commFp = await computeCommunityFingerprint(communityId);
-  const { output, meta } = await runLlm<PricingModelOutput>({
+  const scope: CacheKeyScope = {
+    variant: PRICING_CACHE_VARIANT,
+    communityFingerprint: commFp,
+  };
+
+  // 工具执行器：预取与模型 function-call 共用同一条路径 ⇒ 租户防线只有一处（§6.5.6）。
+  const executeTool: ToolExecutor = async (name, rawArgs) => {
+    if (name !== SETTLEMENT_TOOL_SPEC.name) {
+      throw new ToolUnavailableError(`未注册的工具：${name}`);
+    }
+    let json: unknown;
+    try {
+      json = JSON.parse(rawArgs === '' ? '{}' : rawArgs) as unknown;
+    } catch {
+      throw new ToolUnavailableError('工具 arguments 不是合法 JSON');
+    }
+    // `.strict()` 在此剥除模型幻觉出的 communityId 等未知字段。
+    const args = SettlementStatsArgsSchema.parse(json);
+    return renderSettlementForPrompt(await getCommunitySettlementStats(communityId, args));
+  };
+
+  const payload = {
+    name: input.name,
+    description: input.description ?? null,
+    category: input.category ?? null,
+  };
+  const observer = createObserver(`pricing:${input.name.slice(0, 16)}`);
+  const { output, meta } = await runAgentGraph<PricingModelOutput>({
     kind: 'PRICING',
-    messages: [
-      { role: 'system', content: PRICING_SYSTEM_PROMPT },
-      { role: 'user', content: buildPricingUserPrompt(input) },
-    ],
+    systemPrompt: PRICING_SYSTEM_PROMPT,
+    userPrompt: buildPricingUserPrompt(input),
     schema: PricingModelOutputSchema,
     maxTokens: MODEL_MAX_TOKENS.PRICING,
     temperature: MODEL_TEMPERATURE.PRICING,
-    cachePayload: {
-      name: input.name,
-      description: input.description ?? null,
-      category: input.category ?? null,
-    },
-    cacheScope: { variant: PRICING_CACHE_VARIANT, communityFingerprint: commFp },
+    tools: [SETTLEMENT_TOOL_SPEC],
+    executeTool,
+    prefetchEnabled: process.env.AI_PRICING_PREFETCH !== '0',
     fallback: () => fallbackPricing(input),
+    cachePayload: payload,
+    model: gatewayModelPort,
+    cache: scopedCachePort('PRICING', payload, scope),
+    onEvent: observer.onEvent,
   });
+  flushObserver(observer);
   return { ...meta, ...output };
 }
 

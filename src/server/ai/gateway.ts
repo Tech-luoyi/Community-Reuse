@@ -204,3 +204,157 @@ export async function callModel(options: CallModelOptions): Promise<CallModelRes
   }
   return result;
 }
+
+/* ========================= 工具轮次（INC-2） =========================
+ *
+ * `callModel` 是「一次直出 JSON」的旧形状，润色 / FAQ 继续用它，其行为与既有
+ * 9 个单测逐字节一致——**不改动已验证的代码**。
+ *
+ * 下面的 `callModelTurn` 是 agent 图专用的扩展形状：同一套 abort / 退避 / 重试语义，
+ * 但把「模型要工具」与「模型给答案」两种终态都表达出来。
+ */
+
+/** 下发给模型的工具声明（OpenAI 兼容 `tools[]` 元素）。 */
+export interface ToolSpec {
+  name: string;
+  description: string;
+  /** JSON Schema（`type: 'object'`）。**不得**包含 `communityId`（§6.5.6 第 1 条）。 */
+  parameters: Record<string, unknown>;
+}
+
+/** 模型发起的一次工具调用请求。`args` 是**未校验的原始 JSON 文本**。 */
+export interface ToolCall {
+  id: string;
+  name: string;
+  args: string;
+}
+
+/** 一轮模型调用的三种终态。 */
+export type ModelTurn =
+  | { ok: true; kind: 'content'; content: string }
+  | { ok: true; kind: 'tool_calls'; calls: ToolCall[] }
+  | { ok: false; reason: ModelFailureReason; status?: number; detail?: string };
+
+export interface CallModelTurnOptions {
+  messages: ChatMessage[];
+  maxTokens: number;
+  temperature: number;
+  /** 空数组 ⇒ 本轮不下发工具（`REPAIR` / 恢复轮用）。 */
+  tools: ToolSpec[];
+  /** 是否要求 `response_format: json_object`。与工具并存时多数供应商行为未定义，故由调用方显式选。 */
+  jsonMode: boolean;
+  timeoutMs: number;
+}
+
+function extractToolCalls(data: unknown): ToolCall[] | null {
+  if (typeof data !== 'object' || data === null) {
+    return null;
+  }
+  const choices = (data as { choices?: unknown }).choices;
+  if (!Array.isArray(choices) || choices.length === 0) {
+    return null;
+  }
+  const message = (choices[0] as { message?: unknown }).message;
+  if (typeof message !== 'object' || message === null) {
+    return null;
+  }
+  const raw = (message as { tool_calls?: unknown }).tool_calls;
+  if (!Array.isArray(raw) || raw.length === 0) {
+    return null;
+  }
+  const calls: ToolCall[] = [];
+  for (const item of raw) {
+    const fn = (item as { function?: unknown })?.function as {
+      name?: unknown;
+      arguments?: unknown;
+    };
+    if (typeof fn?.name !== 'string') {
+      continue;
+    }
+    calls.push({
+      id: String((item as { id?: unknown }).id ?? `call_${calls.length}`),
+      name: fn.name,
+      args: typeof fn.arguments === 'string' ? fn.arguments : '',
+    });
+  }
+  return calls.length > 0 ? calls : null;
+}
+
+async function attemptTurnOnce(
+  config: GatewayConfig,
+  options: CallModelTurnOptions,
+): Promise<ModelTurn> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), options.timeoutMs);
+  try {
+    const response = await fetch(`${config.baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${config.apiKey}`,
+      },
+      body: JSON.stringify({
+        model: config.model,
+        messages: options.messages,
+        temperature: options.temperature,
+        max_tokens: options.maxTokens,
+        ...(options.tools.length > 0
+          ? { tools: options.tools, tool_choice: 'auto' }
+          : options.jsonMode
+            ? { response_format: { type: 'json_object' } }
+            : {}),
+        stream: false,
+      }),
+      signal: controller.signal,
+    });
+    if (response.status >= 400) {
+      // 4xx/5xx 的具体原因必须留下：网关返回 400 的可能原因很多（不支持 tools、
+      // schema 字段不认、上下文超长），只报 `http_4xx` 等于把线上故障变成无法归因的黑洞。
+      // 一并记下**实际请求的 URL**：`LLM_BASE_URL` 少写 `/v1` 会得到空响应体的 404，
+      // 光看状态码完全分不清是"路径错"还是"模型无渠道"。
+      const detail = await response.text().catch(() => '');
+      return {
+        ok: false,
+        reason: response.status >= 500 ? 'http_5xx' : 'http_4xx',
+        status: response.status,
+        detail: `${config.baseUrl}/chat/completions ${detail.slice(0, 260)}`,
+      };
+    }
+    let data: unknown;
+    try {
+      data = await response.json();
+    } catch {
+      return { ok: false, reason: 'empty' };
+    }
+    const calls = extractToolCalls(data);
+    if (calls !== null) {
+      return { ok: true, kind: 'tool_calls', calls };
+    }
+    const content = extractContent(data);
+    if (content === null || content.trim() === '') {
+      return { ok: false, reason: 'empty' };
+    }
+    return { ok: true, kind: 'content', content };
+  } catch {
+    return { ok: false, reason: controller.signal.aborted ? 'timeout' : 'network' };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * 带工具的一轮模型调用。语义与 `callModel` 对齐：**不抛异常**，故障收敛为 `reason`；
+ * 仅网络 / 5xx / 超时重试 1 次，4xx 与 `empty` 不重试。
+ */
+export async function callModelTurn(options: CallModelTurnOptions): Promise<ModelTurn> {
+  const config = getGatewayConfig();
+  if (config === null) {
+    return { ok: false, reason: 'no_key' };
+  }
+  let turn = await attemptTurnOnce(config, options);
+  if (!turn.ok && isRetryable(turn.reason)) {
+    await sleep(RETRY_BACKOFF_MS);
+    turn = await attemptTurnOnce(config, options);
+  }
+  return turn;
+}
