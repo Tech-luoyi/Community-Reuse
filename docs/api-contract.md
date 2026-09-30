@@ -370,26 +370,45 @@
 
 **缓存指纹（服务端内部）**：定价缓存键 = `sha256(variant:'PRICING_TOOL_V1' + 规范化输入 + 社区数据指纹)`，其中社区数据指纹 = `sha256(count + max(updatedAt))`（`status=ARCHIVED AND price IS NOT NULL` 的归档集）。⇒ 社区成交数据变化后**不会**返回旧价。润色/FAQ 键维持 `sha256(kind + 规范化输入)`。
 
-**时间预算**：每轮模型 ≤6s、工具 ≤1s、**全局硬闸 20s**（最坏路径 = 3 轮模型 + 1 次工具 = 19s ≤ 20s；超时即 `FALLBACK`）。前端应处理最长 ~20s 的等待（典型 3–7s；建议 inline loading + 可取消）。
+**时间预算**（事实源 `src/server/ai/budget.ts`，均可用 env 覆盖）：单轮模型上限 **22s**（`LLM_TIMEOUT_MS`）、**全局硬闸 60s**（`LLM_DEADLINE_MS`）、工具轮次上限 **2**（`LLM_MAX_TOOL_ROUNDS`）。每轮实际超时按 `min(单轮上限, 剩余额度 / 尚需步数)` 摊薄，保证最后一步一定跑得完；额度耗尽即 `FALLBACK`。
+
+> 单轮上限取 22s 而非"典型值"是实测结论：带 tools 单轮实测 1.7 / 15.1 / 16.2 / 20.7s，4 次中 3 次 >15s（见 `budget.ts` 头注）。按典型值设上限会把 agent 主路径掐死在自己的超时上。
+
+前端应处理最长 ~60s 的等待（典型 9–18s；建议 inline loading + 可取消）。
 
 ---
 
 ### 8.2 过程事件流式（INC-2 表示层协商）
 
-三个 `/api/ai/*` 端点支持按 `Accept` 头协商**两种表示**，**契约形状完全相同**，仅投递方式不同：
+**当前只有 `POST /api/ai/pricing` 一个端点**支持按 `Accept` 头协商**两种表示**，两种表示的**契约形状完全相同**，仅投递方式不同：
 
 | `Accept` | 响应 | 用途 |
 |---|---|---|
 | 缺省 / `application/json` | `200 { data: <XxxResult> }` 整包 JSON | **服务端默认表示**；单测与集成测试一律走此路径 |
-| `text/event-stream` | `200` + `Content-Type: text/event-stream`，SSE 事件流 | 前端进度态；长请求（典型 11–18s、最坏 45s）期间可见进展 |
+| `text/event-stream` | `200` + `Content-Type: text/event-stream`，SSE 事件流 | 长请求（典型 9–18s、最坏 60s）期间可见进展 |
 
-流式事件序列：
+> ⚠️ **实现范围与本节初稿不符，以下为实测口径（2026-09-30 核）**：
+>
+> - `polish` / `faq` **不协商**：两条路由恒返回 `jsonOk(...)`（`polish/route.ts:25`、`faq/route.ts:27`），带 `Accept: text/event-stream` 也拿整包 JSON。初稿写的"三个端点"是 **1/3**。
+> - **没有任何客户端消费这条流**：`src/lib/api.ts` 是 `fetch` + `res.text()` + `JSON.parse`，全仓前端零处 `getReader`/`EventSource`；`src/components/ai.tsx` 的加载文案是**静态字符串**，不由 `state` 事件驱动。
+> - 因此 SSE 目前是**服务端已实现且可测、但无消费者**的能力。原设计（T13）的前端半——`src/lib/api.ts` 流式读取、`src/components/ai.tsx` 进度态、`tests/integration/ai-sse.test.ts`——**均未实现**（只有编码器单测 `tests/unit/ai/sse.test.ts`）。
+> - 为什么不给 `polish`/`faq` 补上服务端协商：补了也没有读者，等于把无人消费的代码面扩大三倍。等前端真的要进度态时一并做。
+
+流式事件序列（**取自真供应商实跑字节**，字段名与 `src/server/ai/graph.ts` 的 `GraphEvent` 接口逐字一致）：
 
 ```
-event: state    data: {"state":"TOOL_EXEC","attempt":1,"tool":"getCommunitySettlementStats","latencyMs":38}
-event: state    data: {"state":"VALIDATE","attempt":2,"ok":true,"latencyMs":6120}
+event: state    data: {"state":"CACHE_LOOKUP","attempt":0,"latencyMs":5,"ok":true}
+event: state    data: {"state":"BUILD_PROMPT","attempt":0,"latencyMs":0}
+event: state    data: {"state":"CALL_MODEL","attempt":1,"latencyMs":2276,"ok":true}
+event: state    data: {"state":"TOOL_EXEC","attempt":1,"latencyMs":327,"toolMode":"model","ok":true}
+event: state    data: {"state":"CALL_MODEL","attempt":2,"latencyMs":6577,"ok":true}
+event: state    data: {"state":"DONE","attempt":2,"latencyMs":9236,"ok":true}
 event: result   data: {"data":{ ...与整包 JSON 逐字节相同的契约体... }}
 ```
+
+`state` 的取值**恰好**是这 8 个（图里 emit 的全集）：`CACHE_LOOKUP` / `BUILD_PROMPT` / `CALL_MODEL` / `TOOL_EXEC` / `PREFETCH` / `REPAIR` / `FALLBACK` / `DONE`。
+
+> 初稿这里示例过 `"state":"VALIDATE"` 和字段名 `"tool"`——**两者都不存在**：`VALIDATE` 在 `src/` 全仓零命中，工具名字段实际叫 `toolName`（且只在部分事件上出现，如 `TOOL_EXEC` 的失败分支与 `PREFETCH`）。`sse.ts` 的 `EventBus` 只做入队 + `JSON.stringify`，**没有任何字段重映射**，所以线上字节就是 `GraphEvent` 本身。
 
 **四条硬规则**：
 
@@ -398,9 +417,11 @@ event: result   data: {"data":{ ...与整包 JSON 逐字节相同的契约体...
 3. **R1 不退化**：降级发生时，`result` 携带的仍是完整的 `degraded:true` 规则结果。因此**流式过程中不得提前吐出结果体片段**——否则中途 `REPAIR` 失败或 deadline 耗尽时，已发出的内容无法收回，契约将自相矛盾。
 4. 错误（`INVALID_INPUT` / `RATE_LIMITED` / `NOT_FOUND` / `FORBIDDEN`）在**首个模型调用之前**即可判定，此时**直接返回对应 HTTP 状态码的整包错误信封，不进入事件流**。
 
-> **为什么不上 WebSocket**：SSE 复用同一 POST 端点与同一套鉴权/限流/租户守卫，不新增路由、不破 §10 的 D8 解耦；`EventSource` 不适用（不支持 POST + JSON body），前端用 `fetch` + `ReadableStream`，可带 `credentials:'include'`。
+> **为什么不上 WebSocket**：SSE 复用同一 POST 端点与同一套鉴权/限流/租户守卫，不新增路由、不破 §10 的 D8 解耦；`EventSource` 不适用（不支持 POST + JSON body），**将来**接前端时应用 `fetch` + `ReadableStream`，可带 `credentials:'include'`（截至 2026-09-30 前端尚未实现，见本节开头的实现范围说明）。
 >
-> **部署注意**：宿主需允许长请求（最坏 45s）。托管平台的 HTTP 上限普遍为 10–60s，部署时须把服务端 `TOTAL_DEADLINE_MS` 设为宿主上限的 80%，否则会出现「客户端已断连、服务端仍在跑」的错配。
+> **部署注意**：宿主需允许长请求（最坏 = `TOTAL_DEADLINE_MS`，默认 **60s**）。托管平台的 HTTP 上限普遍为 10–60s，**默认值就已顶到多数宿主的上限**，部署时须把 `LLM_DEADLINE_MS` 设为宿主上限的 80%。
+>
+> ⚠️ **已知缺口（P2-5，未修）**：AI 路由与 `sse.ts` **都没有接 `request.signal`**（全仓零命中）。所以「客户端已断连、服务端仍在跑并继续计费」**不是调参能避免的错配，而是无条件发生**——上面的 `LLM_DEADLINE_MS` 只能给它封顶，不能让它提前停。修法是路由把 `request.signal` 透传进图，并在 `abort` 时终止模型轮次。
 
 ## 9. 健康检查
 

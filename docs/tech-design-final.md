@@ -920,6 +920,40 @@ INC-1 的流程状态散在 `runLlm` 的局部变量里，不可测、不可恢�
 | `FALLBACK` | 规则引擎产确定性结果（§6.3） | →`PERSIST` |
 | `PERSIST` | **仅 `source='llm'` 写缓存**（`variant`+`commFp` 入 `outputJson`）；写 checkpoint | →`DONE` |
 
+> #### ⚠️ 6.6.3bis 实现与本节设计的差异（2026-09-30 逐条核对 `src/server/ai/graph.ts`）
+>
+> 上面的状态图与 channel 表是 **INC-2 的设计记录，保留原样**。实现落地时做了若干结构性简化，
+> 列在这里以免读者拿设计图去对代码时对不上号。**实现是 9 个节点，不是图里的 11 个。**
+>
+> | 设计 | 实现 | 说明 |
+> |---|---|---|
+> | `RETRIEVE` 独立节点 + 两条边 | **无此节点** | 语义检索实现为**工具** `search_similar_items`，在 `TOOL_EXEC` 内经 `executeTool` 执行（`service.ts:200-201`）。`AGENT_CALL → RETRIEVE → AGENT_CALL` 被 `AGENT_CALL → TOOL_EXEC → AGENT_CALL` 吸收。好处是租户防线只剩一处（预取与 function-call 共用执行器）。 |
+> | `PARSE → VALIDATE → PERSIST` | **无 `VALIDATE` 节点** | `parse` 一个节点内做完 `JSON.parse` + Zod（`graph.ts` 的 `parseWith()`），失败由 `routeAfterParse` 直接送 `REPAIR`。 |
+> | `DONE` 是节点 | 是 `persist` 发出的**事件** | 见 `graph.ts` 的 `persist` 节点；图里是 `persist → END`。 |
+> | `retrieved` channel（append，供 §6.5.6 第 7 条取证） | **未实现** | 跨租户检索断言改由 `tests/integration/retrieve-tenant.test.ts` 直接测 `searchSimilarItems` 承担，不经图状态。 |
+> | `deadlineAt` channel | `budget: Budget` 快照对象 | `budget.ts:55-63`；每步查 `roundTimeoutMs` / `canEnterRepair`。 |
+> | `result` channel | `output` | 纯改名。 |
+> | —（设计表未列） | 新增 `repairBlocked` / `lastTurn` / `cacheHit` | `repairBlocked` 是显式「不再修补」标志，取代魔法哨兵，让 REPAIR 出口可被单测直接断言（见 `graph.ts` 的 `State.repairBlocked`）。 |
+> | `messages` 用 `messagesStateReducer`，含 **tool** 全轨迹 | 自定义 reducer | `graph.ts` 的 `State.messages`；且 `ChatRole = 'system'｜'user'｜'assistant'`（`gateway.ts`）**没有 `tool` 角色**——工具结果被压平成 `role:'user'` 回灌（`toolExec` 节点）。当前供应商接受（已实跑验证），但这是**可移植性负债**：换更严格的 OpenAI 兼容供应商时，这里是下一个可能 400 的点。 |
+> | `AGENT_CALL` 用 `ChatOpenAI` | 委托 `gateway.callModelTurn` | 理由写在 `graph.ts` 头注：gateway 那套 abort / 退避 / 重试语义已有单测覆盖，换 `ChatOpenAI` 等于把验证过的代码扔掉重写。 |
+>
+> **核对为一致的部分**（不是所有设计都走样了）：`TOOL_TIMEOUT_MS = 1500` 确实实现（`tools.ts:21`、`:250`）；终止性三闸确实成立——`toolRounds ≤ MAX_TOOL_ROUNDS(2)`、`repairAttempt ≤ 1`、`prefetchUsed ≤ 1` 三个单调计数器 + 每步查 budget + `recursionLimit: 24`；`FALLBACK` 恒 `degraded:true, source:'rule'`、`PERSIST` 仅 `source='llm'` 写缓存，两条都与 §6.6.1 一致。
+>
+> #### ⚠️ 关于 thread 消息上界（结论取决于你看的是 HEAD 还是工区）
+>
+> 缺口的成因：`messages` 配 `PostgresSaver` 持久化 + 固定 `threadId = pricing:{communityId}:{userId}`，
+> 若只增不减，则超窗后供应商返 4xx，而 `gateway.ts` **明确不对 4xx 重试**（`isRetryable` 只认
+> network / timeout / 5xx）⇒ 直接 FALLBACK，且这条 thread **永不自愈**：用户在该社区的定价能力被
+> 永久打成降级，唯一解法是手工删 checkpoint 行。这是 AI 子系统里唯一「不可自愈」的缺陷。
+>
+> - **截至 HEAD（本文档修订时为 `50c2006`）：无任何截断。** `grep -rn "trimMessages" src/` 零命中，
+>   `State.messages` 的 reducer 是纯追加 `[...prev, ...next]`。
+> - **工区有一份在制品**：`graph.ts` 新增 `MAX_THREAD_MESSAGES = 40` 与 `trimMessages()`（system 消息
+>   全留、其余按时间取最新），并在 **reducer 内**裁剪。放 reducer 是对的——checkpoint 恢复出来的历史
+>   与本轮新增走同一条路径，只在入口裁剪的话累积仍会无界增长。配套 `tests/unit/ai/thread-window.test.ts`。
+>
+> 该在制品由**并发会话产出、尚未提交**，本文档不替它宣告完成；提交后应把上面第一条删掉。
+
 #### 6.6.4 时间预算（按实测重算）
 
 INC-1 假设「典型轮 1.5–3.5s」，**被实测推翻**，且不同供应商差异巨大：
@@ -989,21 +1023,35 @@ INC-1 假设「典型轮 1.5–3.5s」，**被实测推翻**，且不同供应�
 POST /api/ai/pricing
 Accept: text/event-stream        ← 有则流式；无则维持整包 JSON（向后兼容）
 
-event: state   {"state":"TOOL_EXEC","attempt":1,"tool":"getCommunitySettlementStats","latencyMs":38}
-event: state   {"state":"RETRIEVE","attempt":1,"hits":5,"latencyMs":340}
-event: state   {"state":"VALIDATE","attempt":2,"ok":true,"latencyMs":6120}
-event: result  {"data":{"degraded":false,"source":"llm","usedTools":true,"toolCalls":2,
-                        "mode":"PRICED","priceRange":{"min":80,"max":240,"currency":"CNY"},
+event: state   {"state":"CACHE_LOOKUP","attempt":0,"latencyMs":5,"ok":true}
+event: state   {"state":"BUILD_PROMPT","attempt":0,"latencyMs":0}
+event: state   {"state":"CALL_MODEL","attempt":1,"latencyMs":2276,"ok":true}
+event: state   {"state":"TOOL_EXEC","attempt":1,"latencyMs":327,"toolMode":"model","ok":true}
+event: state   {"state":"CALL_MODEL","attempt":2,"latencyMs":6577,"ok":true}
+event: state   {"state":"DONE","attempt":2,"latencyMs":9236,"ok":true}
+event: result  {"data":{"degraded":false,"source":"llm","usedTools":true,"toolCalls":1,
+                        "mode":"PRICED","priceRange":{"min":150,"max":200,"currency":"CNY"},
                         "reason":"…"}}
 ```
 
+> 上面是**真供应商实跑字节**（2026-09-30，`step-3.7-flash`），不是设想中的示例。
+> 初稿这块写过 `"state":"RETRIEVE"`（带 `hits` 字段）与 `"state":"VALIDATE"`，**两者都不存在**；
+> 工具名字段也不叫 `"tool"` 而叫 `toolName`。实际状态全集恰为 8 个：
+> `CACHE_LOOKUP` / `BUILD_PROMPT` / `CALL_MODEL` / `TOOL_EXEC` / `PREFETCH` / `REPAIR` / `FALLBACK` / `DONE`
+> （见 `graph.ts` 的 `emit()` 调用点；`GraphEvent` 接口同文件定义，`sse.ts` 的 `EventBus`
+> 只做入队 + `JSON.stringify`，**无字段重映射**，所以线上字节就是 `GraphEvent` 本身）。
+
 三条保证：
 
-1. **R1 不退化**——权威的 `data` 只在 `VALIDATE` 通过或 `FALLBACK` 之后发**一次**；降级时它照样是完整规则结果。流中前段全是过程事件，不承载契约。
-2. **进度态有真实内容**——前端「正在查证本小区行情…」由 `state` 事件驱动，不是假动画。
-3. **可测性**——不带 `Accept: text/event-stream` 即原整包 JSON；**单测与集成测试全部走非流式路径**，不引入 SSE 解析依赖。
+1. **R1 不退化**——权威的 `data` 只在 `persist` 节点发**一次**，而 `persist` 只有两个入边：`parse` 成功（模型输出过了 schema）或 `fallback`（规则兜底）。降级时它照样是完整规则结果。流中前段全是过程事件，不承载契约。
+2. **进度态有真实内容**——⚠️ **未实现**。前端「正在查证本小区行情…」目前是 `src/components/ai.tsx:127` 的**静态字符串**，不由 `state` 事件驱动；全仓前端零处 `getReader`/`EventSource`。即初稿承诺的"不是假动画"，当前**恰恰是假动画**。服务端 `state` 事件已真实产出并有编码器单测，缺的是消费端。
+3. **可测性**——不带 `Accept: text/event-stream` 即原整包 JSON；**单测与集成测试全部走非流式路径**，不引入 SSE 解析依赖。（这条成立，但代价是 `tests/integration/ai-sse.test.ts` 至今不存在，流式路径**没有集成测试覆盖**。）
 
 技术选型：SSE over 同一 POST 端点（`fetch` + `ReadableStream`，可带 `credentials:'include'`），**不新增路由、不上 WebSocket、不破 D8**。`EventSource` 不适用（不支持 POST + JSON body）。
+
+> **实现范围（2026-09-30 核）**：只有 `POST /api/ai/pricing` 协商两种表示；`polish`/`faq` 恒返回整包 JSON（`polish/route.ts:25`、`faq/route.ts:27`）。T13 的服务端半（`sse.ts` + pricing 路由协商）已完成，**前端半未完成**。详见 `docs/api-contract.md` §8.2。
+>
+> **已知缺口（P2-5，未修）**：AI 路由与 `sse.ts` 都没接 `request.signal`，客户端断连后模型仍继续跑并计费——不是部署调参能避免的，`LLM_DEADLINE_MS` 只能给它封顶。
 
 #### 6.6.7 实施分期（每期结束必须全门禁绿、可 demo）
 
@@ -1190,7 +1238,7 @@ AppShell
 | **T12** | **【INC-2】LangGraph 图运行时** | `src/server/ai/graph.ts`(新：`StateGraph` 定义 + §6.6.2 reducer channel + 条件边) `src/server/ai/nodes.ts`(新：`CACHE_LOOKUP/BUILD_PROMPT/AGENT_CALL/TOOL_EXEC/RETRIEVE/PREFETCH/PARSE/VALIDATE/REPAIR/FALLBACK/PERSIST` 各节点，一文件一职责) `src/server/ai/observe.ts`(新：每态结构化日志 + `toolMode`) `src/server/ai/budget.ts`(新：`deadlineAt` / `min(步上限,剩余)` 计算) `src/server/ai/service.ts`(改为 `graph.invoke`) `tests/unit/ai/graph.test.ts`(新) `tests/unit/ai/budget.test.ts`(新) | T08 | **P0** | 节点与条件边**与 §6.6.1 图逐一对应**（含 F6：`tool_calls ∧ 轮次超限 → REPAIR`；F4：**局部摘除单个工具**而非全量去 tools；PREFETCH 分支）；**每态记 `{state,attempt,latencyMs,toolName?,toolMode?,ok}`**；两级预算（**12s / 1.5s / 60s**）生效且 `TOTAL_DEADLINE_MS` **真实被引用**（INC-1 期间它是死常量）；**终止性单测**：模拟「一直非法 JSON」「一直请求工具」「工具一直超时」「一直不调工具」「embed 一直挂」⇒ 有界终止；现有三能力（定价/润色/FAQ）**行为零回归** |
 | **T11a** | **【INC-2·P0】跨租户缓存指纹 + 聚合工具** | `src/server/ai/fingerprint.ts`(新：`communityFingerprint` 廉价聚合) `src/server/ai/cache.ts`(`computeCacheKey` 改 `sha256(variant+input+commFp)`，`outputJson` 内嵌 `variant`/`commFp`) `src/server/ai/tools.ts`(新：`getCommunitySettlementStats` 执行器，**预取与 function-call 共用**) `src/server/ai/prefetch.ts`(新：§6.5.8 保险模式) `tests/unit/ai/fingerprint.test.ts`(新) `tests/unit/ai/tools.test.ts`(新) | T08 | **P0（红线先行）** | **本任务是 T12 的前置而非后置**：定价一旦消费社区语料，缺指纹即静默跨租户泄漏。验收：**①** 工具 schema 无 `communityId`；**②** 伪造 `arguments.communityId` 被 Zod `additionalProperties:false` 剥除；**③** SQL 恒带 `WHERE communityId=<会话>`（**预取路径同断言**）；**④** 改一件归档物品的价 → 指纹变 → **不命中旧缓存**；**⑤** A 社区请求**不得**命中 B 社区缓存条目 |
 | **T11b** | **【INC-2·P1】语义检索** | `prisma/migrations/0003_*`(`CREATE EXTENSION vector` + `ItemEmbedding` + HNSW + `communityId` 索引) `prisma/schema.prisma`(新增 `ItemEmbedding` 模型) `docker/db.Dockerfile`(新：装 Alpine v3.20 归档仓库针对 PG16 预编译的 pgvector apk，绕开被污染的 Docker Hub 与卡死的源码编译) + `.dockerignore`(新：上下文从 1.058GB 降到 KB 级) + `docker-compose.yml`(改用 build，**保留 `TZ: UTC`**) `src/server/ai/embeddings.ts`(新：`EmbeddingProvider` 接口 + OpenAI 兼容实现，env 驱动) `src/server/ai/retrieve.ts`(新：`search_similar_items`，**先过滤后排序**) `src/server/ai/index-pipeline.ts`(新：事务后异步重算 + `contentHash` 幂等) `prisma/embed-backfill.ts` + `npm run db:embed` `tests/integration/retrieve-tenant.test.ts`(新) | T11a, T12 | **P1** | §6.5.6 **第 6、7 条**断言通过：向量 SQL 带社区谓词、且**不得**先全局 top-k 再过滤；A 社区检索结果不出现在 B 社区 prompt 中；`embed()` 挂 ⇒ 局部摘除检索工具、**保留聚合**、仍 `source:'llm' degraded:false`；索引失败**不阻断**发布/归档主流程；`ItemEmbedding` 写路径**只经 `index-pipeline`**（`vector` 是 `Unsupported`，Prisma Client 读写不了该列——§4.3② 在此以四条替代纪律执行，见 §6.5.9） |
-| **T13** | **【INC-2·P1】SSE 过程事件流式** | `src/server/ai/sse.ts`(新：`ReadableStream` 编码) `src/app/api/ai/pricing/route.ts`(按 `Accept` 协商) `src/lib/api.ts`(前端流式读取) `src/components/ai.tsx`(进度态) `tests/integration/ai-sse.test.ts`(新) | T12 | **P1** | 不带 `Accept: text/event-stream` 时**响应与现在逐字节一致**（单测/集成测试走非流式，不引入 SSE 解析）；带时过程事件流 + **末尾唯一一个 `result` 事件承载整包契约**；**R1 验收**：注入「中途 deadline 耗尽」「REPAIR 最终失败」⇒ `result` 仍是完整 `degraded:true` 规则结果，**不出现半截 JSON** |
+| **T13** | **【INC-2·P1】SSE 过程事件流式** | `src/server/ai/sse.ts`(新：`ReadableStream` 编码)✅ `src/app/api/ai/pricing/route.ts`(按 `Accept` 协商)✅ `src/lib/api.ts`(前端流式读取)❌**未实现** `src/components/ai.tsx`(进度态)❌**仍是静态文案** `tests/integration/ai-sse.test.ts`(新)❌**文件不存在**（仅有编码器单测 `tests/unit/ai/sse.test.ts`） | T12 | **P1** | 不带 `Accept: text/event-stream` 时**响应与现在逐字节一致**（单测/集成测试走非流式，不引入 SSE 解析）；带时过程事件流 + **末尾唯一一个 `result` 事件承载整包契约**；**R1 验收**：注入「中途 deadline 耗尽」「REPAIR 最终失败」⇒ `result` 仍是完整 `degraded:true` 规则结果，**不出现半截 JSON** |
 | **T14** | **【INC-2·P2】多轮会话记忆** | `src/server/ai/checkpoint.ts`(新：`PostgresSaver` 装配) `src/app/api/ai/pricing/route.ts`(透传 `threadId`) `tests/integration/ai-memory.test.ts`(新) `docs/er-diagram-final.mermaid`(增补 `ItemEmbedding`) | T11b | **P2** | 同 `threadId` 二次请求可引用首轮结论；**记忆按 `(userId, communityId)` 隔离**；checkpoint 表**不在** Prisma 管理下且 `migrate diff` 不产生 DROP（§10 DDL 归属纪律） |
 
 **INC-2 任务说明**：依赖链为 **`T11a → T12 → T11b → T13 → T14`**，与 INC-1 的「T12 优先于 T11」**顺序相反**——原因：INC-1 把状态机当作 T11 的地基；INC-2 里**跨租户缓存指纹（T11a）才是地基**，因为它既是红线又是 T12 中 `CACHE_LOOKUP` 节点的输入。**Feature Cut 边界**：时间不足砍 **T14**，其次砍 **T13 的流式**（保留检索）；**T11a 与 T12 不可砍**。
